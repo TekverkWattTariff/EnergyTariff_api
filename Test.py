@@ -6,11 +6,15 @@ import datetime
 import api_InteractionLayer
 print("\nStart of TEST")
 url = "https://api.tekniskaverken.net/subscription/public/v0/tariffs"
+#url = "https://api.goteborgenergi.cloud/gridtariff/v0/tariffs"
 Tariff = api_InteractionLayer.Tariffs("v0",url)
+Tariff2 = api_InteractionLayer.Tariffs("V0")
 Price = Tariff.Price(Tariff)
 Power = Price.Power(Price)
 #print(f"{tariff.get_api_teriffs_names()}") #debugg
 tariffs = Tariff.get_tariffs()
+path = "C://Users/Local/Desktop/Projekts/Test/tariffs-response_tekniska-verken.json"
+tariffs2 = Tariff2.get_tariffs_byJson(path)
 """
 print("Tillgängliga prislistor:\n")
 for i, tariff in enumerate(tariffs):
@@ -22,7 +26,11 @@ val = input("Ange siffran för det abonnemang du vill se info om: ")
 try:
     index = int(val)
     chosen_tariff = tariffs[index]
-    print(f"\nDu valde: {chosen_tariff.name}")
+    print(f"Du valde: {chosen_tariff.name}")
+    print(f"ID: {chosen_tariff.id}")
+
+    print(f"\nFrome json file with path: {path}")
+    print(f"Du valde: {chosen_tariff.name}")
     print(f"ID: {chosen_tariff.id}")
     chosen_index = index
     

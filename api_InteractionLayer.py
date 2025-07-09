@@ -2,6 +2,7 @@
 import sys
 import os
 import datetime
+import json
 
 # Add OpenAPI-generated path for imports
 sys.path.append(os.path.abspath("Openapi/GeneratedApiFiles"))
@@ -33,7 +34,7 @@ class Tariffs:
     tariff_id= None
     api_instance = None
     
-    def __init__(self,v,url,tariff_id = None) -> None:
+    def __init__(self,v,url = None,tariff_id = None) -> None:
         """
         Initializes the Tariffs class with API connection.
 
@@ -45,7 +46,8 @@ class Tariffs:
         self.price = self.Price(self)  # Initialize Price as a subcomponent
         self.v = v
         self.tariff_id = self.set_id(tariff_id)
-        url = url.replace("/v0/tariffs", "")
+        if url != None:
+            url = url.replace("/v0/tariffs", "")
         self.url = url
 
         # Create OpenAPI configuration
@@ -91,21 +93,71 @@ class Tariffs:
             list: List of tariff objects.
         """
         response = self.api_instance.get_tariffs(self.v)
+        #print("DEBUG - API response:", response)
         return response.tariffs
-    
-    def get_tariff(self,tariff_id=None):
+
+    def get_tariffs_byJson(self,path):
+        """
+        Returns all tariffs available from a local JSON file instead of the API.
+
+        Args:
+            path (str): Full file path to the JSON file.
+
+        Returns:
+            list: List of tariff objects, or empty list if an error occurs.
+        """
+        # Check if file exists
+        if not os.path.isfile(path):
+            print(f"ERROR - File not found at: {path}")
+            return []
+
+        try:
+            # Open and load the JSON file
+            with open(path, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+        except json.JSONDecodeError as e:
+            print(f"ERROR - Failed to decode JSON: {e}")
+            return []
+        except Exception as e:
+            print(f"ERROR - Unexpected error while reading file: {e}")
+            return []
+
+        # Check if 'tariffs' key exists and is a list
+        tariffs = data.get('tariffs', [])
+        if not isinstance(tariffs, list):
+            print("ERROR - 'tariffs' key missing or not a list in JSON data.")
+            return []
+
+        return tariffs
+
+    def get_tariff(self, tariff_id=None):
         """
         Returns the tariff object for a given tariff ID.
 
         Args:
             tariff_id (str): ID of the tariff.
-
+            if no url is given to Tariffs class it will use get_tariffs_byJson
         Returns:
             object | None: Tariff object or None if not found.
         """
-        tariffs = self.get_tariffs()
+        try:
+            # Try to fetch tariffs via API (if URL exists)
+            tariffs = self.get_tariffs()
+        except Exception as e:
+            # Prompt user for local JSON file path
+            path = input("What's the .json file path? ")
+            # Redundancy check: verify file exists
+            if not os.path.isfile(path):
+                print("ERROR - File not found. Returning None.")
+                return None
+            # Load tariffs from local JSON file
+            tariffs = self.get_tariffs_byJson(path)
+
         for t in tariffs:
-            if t.id == tariff_id:
+            # Here we assume t is either a dict or an object with 'id'
+            # If t is a dict, use t['id'], otherwise t.id
+            tariff_id_value = getattr(t, 'id', None) or (t.get('id') if isinstance(t, dict) else None)
+            if tariff_id_value == tariff_id:
                 return t
         return None
     
@@ -759,7 +811,7 @@ class Tariffs:
                     total_price = 0
                     for i in range(hours):
                         current_time = check_time + datetime.timedelta(hours=i)
-                        #print(f"current_time: {current_time}")
+
                         try:
                             energy_components = self.parent.get_energy_price(tariff_id,current_time)
                             hour_price = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
