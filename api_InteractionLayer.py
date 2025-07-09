@@ -59,6 +59,14 @@ class Tariffs:
         #print(f"api_instance type: {type(self.api_instance)}") #Debugg
         pass
     
+    def set_json_path(self, path):
+        """Sets the local JSON file path to be used as fallback or source."""
+        self._json_path = path
+
+    def get_json_path(self):
+        """Gets the currently set JSON file path."""
+        return self._json_path
+
     def get_company(self,tariff_id):
         """
         Returns the company name of the given tariff ID.
@@ -136,29 +144,43 @@ class Tariffs:
 
         Args:
             tariff_id (str): ID of the tariff.
-            if no url is given to Tariffs class it will use get_tariffs_byJson
+            If no URL is provided to the Tariffs class, it will use get_tariffs_byJson
+            nd prompt for a valid file path if necessary.
         Returns:
             object | None: Tariff object or None if not found.
         """
-        try:
-            # Try to fetch tariffs via API (if URL exists)
-            tariffs = self.get_tariffs()
-        except Exception as e:
-            # Prompt user for local JSON file path
-            path = input("What's the .json file path? ")
-            # Redundancy check: verify file exists
-            if not os.path.isfile(path):
-                print("ERROR - File not found. Returning None.")
+        tariffs = []
+        self.chek_id(tariff_id)
+        if self.url:
+            # Try to fetch from API if URL is provided
+            try:
+                tariffs = self.get_tariffs()
+            except Exception as e:
+                print(f"ERROR - Failed to fetch from API: {e}")
                 return None
-            # Load tariffs from local JSON file
+        else:
+            # No URL provided, fall back to JSON file
+            path = self.get_json_path()
+
+            # If no path is set or file doesn't exist, prompt the user until valid
+            while not path or not os.path.isfile(path):
+                path = input("Enter path to the .json file (or type 'exit' to cancel): ").strip()
+                if path.lower() == 'exit':
+                    print("Aborted by user.")
+                    return None
+                if not os.path.isfile(path):
+                    print("ERROR - File not found. Please try again.")
+                    continue
+                self.set_json_path(path)  # Save for future use
+
+            print(f"File found at path: {path}")
             tariffs = self.get_tariffs_byJson(path)
 
-        for t in tariffs:
-            # Here we assume t is either a dict or an object with 'id'
-            # If t is a dict, use t['id'], otherwise t.id
-            tariff_id_value = getattr(t, 'id', None) or (t.get('id') if isinstance(t, dict) else None)
+        for tariff in tariffs:
+            tariff_id_value = getattr(tariff, 'id', None) or getattr(tariff, 'tariff_id', None)
             if tariff_id_value == tariff_id:
-                return t
+                return tariff
+            
         return None
     
     def get_tariff_byName(self,tariff_name,company):
@@ -183,11 +205,8 @@ class Tariffs:
         Returns:
             list[str]: List of tariff IDs.
         """
-        ids = []
         tariffs = self.get_tariffs()
-        for tariff in tariffs:
-            ids.append(tariff.id)
-        return ids
+        return [tariff.tariff_id for tariff in tariffs]
     
     def get_tariffs_names(self):
         """
@@ -212,9 +231,9 @@ class Tariffs:
             str: Tariff ID.
         """
         tariffs = self.get_tariffs()
-        tariff = tariffs[index]
-        #print(f"Selected index: {index}, tariff id: {tariff.id}")  # Debug
-        return tariff.id
+        if 0 <= index < len(tariffs):
+            return tariffs[index].tariff_id
+        raise IndexError("Index out of range")
     
     def set_id(self,tariff_id):
         """
@@ -236,9 +255,10 @@ class Tariffs:
         Returns:
             str: Valid tariff ID.
         """
-        if tariff_id == None:
-                tariff_id = self.tariff_id
-        return tariff_id
+        for tariff in self.get_tariffs():
+            if tariff.tariff_id == tariff_id:
+                return True
+        return False
 
     def get_id_byName(self,tariff_name,company):
         """
@@ -286,7 +306,7 @@ class Tariffs:
             else:
                 self.parent = Tariffs
             self.power = self.Power(self)  # Initialize Power as a subcomponent
-            self.tariff_id = parent.tariff_id
+            self.set_id(parent.tariff_id)
             return
         
         def set_id(self,tariff_id):
@@ -566,7 +586,7 @@ class Tariffs:
                 else:
                     self.parent = Tariffs.Price
                 self.energy_data = [{"datetime":None,int:None}]
-                self.tariff_id = parent.tariff_id
+                self.set_id(parent.tariff_id)
                 pass
 
             def set_id(self,tariff_id):
@@ -851,7 +871,7 @@ class Tariffs:
                 else:
                     self.parent = Tariffs.Price
                 self.power_data = [{"datetime":None,int:None}]
-                self.tariff_id = parent.tariff_id
+                self.set_id(parent.tariff_id)
                 pass
 
             def set_id(self,tariff_id):

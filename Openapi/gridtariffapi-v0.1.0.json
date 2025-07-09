@@ -444,10 +444,11 @@
                     "type": {
                         "description": "Type describes if the price component is a publicly available price or customer specific.",
                         "type": "string",
-                        "pattern": "public|specific",
+                        "pattern": "public|specific|fixed",
                         "examples": [
                             "public",
-                            "specific"
+                            "specific",
+                            "fixed"
                         ],
                         "default": "fixed"
                     },

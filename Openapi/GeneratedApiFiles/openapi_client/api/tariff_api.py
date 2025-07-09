@@ -87,6 +87,7 @@ class TariffApi:
         :type _host_index: int, optional
         :return: Returns the result object.
         """ # noqa: E501
+
         _param = self._get_tariff_by_id_serialize(
             v=v,
             id=id,
@@ -95,6 +96,7 @@ class TariffApi:
             _headers=_headers,
             _host_index=_host_index
         )
+
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "TariffResponse",
             '400': "ProblemDetails",

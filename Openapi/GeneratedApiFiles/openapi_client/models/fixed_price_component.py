@@ -45,8 +45,8 @@ class FixedPriceComponent(BaseModel):
         if value is None:
             return value
 
-        if not re.match(r"public|specific", value):
-            raise ValueError(r"must validate the regular expression /public|specific/")
+        if not re.match(r"public|specific|fixed", value):
+            raise ValueError(r"must validate the regular expression /public|specific|fixed/")
         return value
 
     model_config = ConfigDict(

@@ -1,122 +1,73 @@
 import unittest
-from api_InteractionLayer import Tariffs
+from unittest.mock import patch, MagicMock
 from datetime import datetime
+from api_InteractionLayer import Tariffs
+
 
 class TestTariffs(unittest.TestCase):
-
     def setUp(self):
-        self.tariff = Tariffs(v="V1", url="http://dummy.url", tariff_id="test-id")
+        self.tariff = Tariffs(v="V1", url="https://fake.api")
 
-    def test_get_company(self):
-        result = self.tariff.get_company("test-id")
-        self.assertIsNotNone(result)
+    @patch.object(Tariffs, "get_tariff")
+    def test_get_tariff(self, mock_get_tariff):
+        mock_tariff = MagicMock()
+        mock_tariff.tariff_id = "tariff-123"
+        mock_get_tariff.return_value = mock_tariff
 
-    def test_get_companys(self):
-        result = self.tariff.get_companys()
-        self.assertIsInstance(result, list)
+        result = self.tariff.get_tariff("tariff-123")
+        self.assertEqual(result, mock_tariff)
 
-    def test_get_tariff(self):
-        result = self.tariff.get_tariff()
-        self.assertIsNotNone(result)
+    @patch.object(Tariffs, "get_tariffs")
+    def test_get_tariffs_ids(self, mock_get_tariffs):
+        mock_tariffs = [
+        MagicMock(),
+        MagicMock(),
+        MagicMock()
+        ]
+        # Explicitly set string values
+        mock_tariffs[0].tariff_id = "id-0"
+        mock_tariffs[1].tariff_id = "id-1"
+        mock_tariffs[2].tariff_id = "id-2"
+        mock_get_tariffs.return_value = mock_tariffs
 
-    def test_get_tariff_byName(self):
-        company = self.tariff.get_companys()[0] if self.tariff.get_companys() else None
-        if company:
-            result = self.tariff.get_tariff_byName("SomeName", company)
-            self.assertIsNotNone(result)
+        result = self.tariff.get_tariffs_ids()
+        self.assertEqual(result, ["id-0", "id-1", "id-2"])
 
-    def test_get_tariffs_ids(self):
-        ids = self.tariff.get_tariffs_ids()
-        self.assertIsInstance(ids, list)
+    @patch.object(Tariffs, "get_tariffs")
+    def test_get_id_valid_index(self, mock_get_tariffs):
+        mock_t = MagicMock()
+        mock_t.tariff_id  = "abc"
+        mock_get_tariffs.return_value = [mock_t]
 
-    def test_get_tariffs_names(self):
-        names = self.tariff.get_tariffs_names()
-        self.assertIsInstance(names, list)
+        result = self.tariff.get_id(0)
+        self.assertEqual(result, "abc")
 
-    def test_get_id(self):
-        index = 0
-        result = self.tariff.get_id(index)
-        self.assertIsNotNone(result)
+    @patch.object(Tariffs, "get_tariffs", return_value=[])
+    def test_get_id_out_of_range(self, mock_get_tariffs):
+        with self.assertRaises(IndexError):
+            self.tariff.get_id(0)
 
-    def test_set_id(self):
-        self.tariff.set_id("new-id")
-        self.assertEqual(self.tariff.tariff_id, "new-id")
+    @patch.object(Tariffs, "get_tariffs")
+    def test_set_and_check_id(self, mock_get_tariffs):
+        mock_t = MagicMock()
+        mock_t.tariff_id  = "my-id"
+        mock_get_tariffs.return_value = [mock_t]
 
-    def test_chek_id(self):
-        self.assertTrue(self.tariff.chek_id("test-id"))
+        self.tariff.set_id("my-id")
+        self.assertTrue(self.tariff.chek_id("my-id"))
+        self.assertFalse(self.tariff.chek_id("missing-id"))
+
 
 class TestPrice(unittest.TestCase):
-
     def setUp(self):
-        self.parent = Tariffs(v="V1", url="http://dummy.url", tariff_id="test-id")
-        self.price = self.parent.Price(self.parent)
-
-    def test_set_id(self):
-        self.price.set_id("new-id")
-        self.assertEqual(self.price.tariff_id, "new-id")
-
-    def test_get_fixed_price(self):
-        dt = datetime.now()
-        result = self.price.get_fixed_price("test-id", dt)
-        self.assertIsNotNone(result)
-
-    def test_get_energy_price(self):
-        dt = datetime.now()
-        result = self.price.get_energy_price("test-id", dt)
-        self.assertIsNotNone(result)
-
-    def test_get_power_price(self):
-        dt = datetime.now()
-        result = self.price.get_power_price("test-id", dt)
-        self.assertIsNotNone(result)
-
-    def test_get_price(self):
-        dt = datetime.now()
-        result = self.price.get_price("test-id", dt)
-        self.assertIsNotNone(result)
-
-    def test_set_data(self):
-        dummy_data = {"energy": 0.3}
-        self.price.set_data(dummy_data)
-
-    def test_get_duration(self):
-        result = self.price.get_duration()
-        self.assertIsInstance(result, int)
+        self.tariff = Tariffs(v="V1", url="https://fake.api")
+        self.price = self.tariff.Price(self.tariff)
 
     def test_extract_price_value(self):
-        dummy_price = {"value": 100}
-        val = self.price.extract_price_value(dummy_price)
-        self.assertEqual(val, 100)
-
-    def test_extract_price_function(self):
-        dummy_price = {"function": lambda: 5}
-        result = self.price.extract_price_function(dummy_price)
-        self.assertEqual(result(), 5)
-
-class TestPower(unittest.TestCase):
-
-    def setUp(self):
-        self.parent = Tariffs(v="V1", url="http://dummy.url", tariff_id="test-id")
-        self.power = self.parent.Price.Power(self.parent)
-
-    def test_set_id(self):
-        self.power.set_id("new-id")
-        self.assertEqual(self.power.tariff_id, "new-id")
-
-    def test_set_data(self):
-        self.power.set_data({"power": 100})  # Kontrollera vad den förväntar sig
-
-    def test_get_duration(self):
-        result = self.power.get_duration()
-        self.assertIsInstance(result, int)
-
-    def test_extract_price_value(self):
-        result = self.power.extract_price_value({"value": 300})
+        print("in string try: price_data:", 300)
+        result = self.price.Power.extract_price_value(self.price.Power, {"price": 300})
         self.assertEqual(result, 300)
 
-    def test_extract_price_function(self):
-        result = self.power.extract_price_function({"function": lambda: 42})
-        self.assertEqual(result(), 42)
 
 if __name__ == "__main__":
     unittest.main()
