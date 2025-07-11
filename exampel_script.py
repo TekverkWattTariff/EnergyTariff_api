@@ -10,8 +10,8 @@ url = "https://api.tekniskaverken.net/subscription/public/v0/tariffs"
 Tariff = api_InteractionLayer.Tariffs("v0",url)
 Tariff2 = api_InteractionLayer.Tariffs("V0")
 Price = Tariff.Price(Tariff)
-Energy = Price.Energy()
-Power = Price.Power()
+Energy = Price.Energy(Price)
+Power = Price.Power(Price)
 
 #print(f"{tariff.get_api_teriffs_names()}") #debugg
 tariffs = Tariff.get_tariffs()
@@ -78,21 +78,21 @@ print("}")
 
 
 power_raw_data = [
-    {"datetime": datetime.datetime(2025, 5, 1, 12), "peak": 50},
-    {"datetime": datetime.datetime(2025, 5, 1, 13), "peak": 30},
-    {"datetime": datetime.datetime(2025, 5, 1, 14), "peak": 50},
-    {"datetime": datetime.datetime(2025, 5, 1, 15), "peak": 75},
-    {"datetime": datetime.datetime(2025, 5, 1, 16), "peak": 80},
-    {"datetime": datetime.datetime(2025, 5, 1, 17), "peak": 75},
-    {"datetime": datetime.datetime(2025, 5, 1, 18), "peak": 25},
-    {"datetime": datetime.datetime(2025, 5, 1, 19), "peak": 10},
-    {"datetime": datetime.datetime(2025, 5, 1, 20), "peak": 7},
-    {"datetime": datetime.datetime(2025, 5, 1, 21), "peak": 4}
+    {"datetime": datetime.datetime(2025, 5, 1, 12), "kW": 50},
+    {"datetime": datetime.datetime(2025, 5, 1, 13), "kW": 30},
+    {"datetime": datetime.datetime(2025, 5, 1, 14), "kW": 50},
+    {"datetime": datetime.datetime(2025, 5, 1, 15), "kW": 75},
+    {"datetime": datetime.datetime(2025, 5, 1, 16), "kW": 80},
+    {"datetime": datetime.datetime(2025, 5, 1, 17), "kW": 75},
+    {"datetime": datetime.datetime(2025, 5, 1, 18), "kW": 25},
+    {"datetime": datetime.datetime(2025, 5, 1, 19), "kW": 10},
+    {"datetime": datetime.datetime(2025, 5, 1, 20), "kW": 7},
+    {"datetime": datetime.datetime(2025, 5, 1, 21), "kW": 4}
 ]
 Power.set_id(id)
 power_data = Power.set_data(power_raw_data)
 start_time = Power.get_optimal_start(power_data)
 print(f"Optimal time to start: {start_time}")
 time = "4:30"
-operatianal_cost = Energy.get_operation_cost(now,"4:30")
+operatianal_cost = Energy.get_operation_mean_cost(now,"4:30",power_data)
 print(f"Cost of using energy for {time}")

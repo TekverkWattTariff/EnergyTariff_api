@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath("Openapi/GeneratedApiFiles"))
 from Openapi.GeneratedApiFiles.openapi_client.api_client import ApiClient
 from Openapi.GeneratedApiFiles.openapi_client.configuration import Configuration
 from Openapi.GeneratedApiFiles.openapi_client.api import tariff_api
-from Openapi.GeneratedApiFiles.openapi_client.exceptions import NotFoundException
+#from Openapi.GeneratedApiFiles.openapi_client.exceptions import NotFoundException
 
 class Tariffs:
     """
@@ -35,7 +35,7 @@ class Tariffs:
     tariff_id = str
     api_instance = tariff_api.TariffApi
     
-    def __init__(self,v,url: Optional[str],tariff_id: Optional[str]) -> None:
+    def __init__(self,v,url: Optional[str] = None,tariff_id: Optional[str] = None) -> None:
         """
         Initializes the Tariffs class with API connection.
 
@@ -47,7 +47,7 @@ class Tariffs:
         self.price = self.Price(self)  # Initialize Price as a subcomponent
         self.v = v
         self.tariff_id = self.set_id(tariff_id)
-        if url != None:
+        if url is not None:
             url = url.replace("/v0/tariffs", "")
         self.url = url
 
@@ -224,7 +224,7 @@ class Tariffs:
         """
         tariffs = self.get_tariffs()
         if 0 <= index < len(tariffs):
-            return tariffs[index].tariff_id
+            return tariffs[index].id
         raise IndexError("Index out of range")
     
     def set_id(self, tariff_id: str) -> None:
@@ -247,7 +247,8 @@ class Tariffs:
         Returns:
             bool: True if found, False otherwise.
         """
-        return any(t.tariff_id == tariff_id for t in self.get_tariffs())
+        tariffs = self.get_tariffs()
+        return any(t.id == tariff_id for t in tariffs)
 
     def get_id_byName(self, tariff_name: str, company: str) -> str:
         """
@@ -568,14 +569,14 @@ class Tariffs:
             """
             tariff_id = str
             energy_data = [{"datetime":None,"kW":None}]
-            def __init__(self,parent = None) -> None:
+            def __init__(self,parent) -> None:
                 """
                 Initializes the Energy class with a reference to its parent Price instance.
 
                 Args:
                     parent (Price): Instance of the parent class Price.
                 """
-                if parent != None:
+                if parent is not None:
                     self.parent = parent
                 else:
                     self.parent = Tariffs.Price
@@ -592,7 +593,7 @@ class Tariffs:
                     self.tariff_id = tariff_id
                     return
 
-            def set_data(self, energy_data_input: Union[dict[str, Union[str, float]], list[dict[str, Union[str, float]]]]) -> list[dict[str, Union[str, float]]]:
+            def set_data(self, energy_data_input: list[dict[str, Union[str, float]]]) -> list[dict[str, Union[str, float]]]:
                 """
                 Accepts and stores energy data.
 
@@ -646,20 +647,28 @@ class Tariffs:
                 )
                 return self.energy_data
 
-            def get_mean(self,energy_data_input: list[float]) -> float:
+            def get_mean(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> float:
                 """
-                Calculate the mean energy value from a list of values.
+                Calculate the mean energy value from a list of dicts with 'kW'.
 
                 Args:
-                    energy_data (list[float]): List of energy values.
+                    energy_data_input (list[dict]): Each dict must have a 'kW' key.
 
                 Returns:
-                    float: Mean value.
+                    float: Mean kW value.
                 """
-                mean_value = sum(energy_data_input)/len(energy_data_input)
+                if energy_data_input is not None:
+                    energy_data = energy_data_input
+                else:
+                    energy_data = self.energy_data
+
+                if not energy_data or not isinstance(energy_data, list):
+                    raise ValueError("Energy data must be a non-empty list of dicts.")
+
+                mean_value = sum(d["kW"] for d in energy_data) / len(energy_data)
                 return mean_value
-            
-            def get_duration(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]]) -> datetime.timedelta:
+                        
+            def get_duration(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.timedelta:
                 """
                 Calculate duration between first and last timestamps in the data.
 
@@ -669,13 +678,13 @@ class Tariffs:
                 Returns:
                     datetime.timedelta: Duration.
                 """
-                if energy_data_input != None:
+                if energy_data_input is not None:
                     energy_data = energy_data_input
                 else:
                     energy_data = self.energy_data
 
                 if len(energy_data) < 2:
-                    raise ValueError("Not enough power data points to determine duration.")
+                    raise ValueError("Not enough energy data points to determine duration.")
                 #Converts to datetime obj
                 datetimes = [datetime.datetime.fromisoformat(p["datetime"]) for p in energy_data]
                 #Calculate time difrence
@@ -778,7 +787,7 @@ class Tariffs:
 
                 raise ValueError("Could not extract costFunction from the input object.")
 
-            def get_optimal_start(self, energy_data: Optional[list[float]]) -> datetime.datetime:
+            def get_optimal_start(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.datetime:
                 """
                 Finds the optimal start time within the next 24h that minimizes
                 total energy cost based on provided or stored energy data.
@@ -792,11 +801,13 @@ class Tariffs:
                 Raises:
                     ValueError: If input data is missing or invalid.
                 """
-                #print(f"in optimal_start. energy_data={energy_data} ")
-                if energy_data is None:
+                # If no energy_data is given use class set data
+                if energy_data_input is not None:
+                    energy_data = energy_data_input
+                else:
                     energy_data = self.energy_data
 
-                if len(energy_data) < 2:
+                if not isinstance(energy_data, list) or len(energy_data) < 2:
                     raise ValueError("Not enough data points to calculate duration.")
 
                 # Calculate duration from first to last timestamp
@@ -866,7 +877,7 @@ class Tariffs:
                     tariff_id = self.tariff_id
 
                     # Fetch energy price components at the given time
-                    energy_components = self.parent.get_energy_price(self.parent,tariff_id, now)
+                    energy_components = self.parent.get_energy_price(tariff_id, now)
 
                     # Sum up all price components (e.g., energy, grid fee, taxes, etc.)
                     price_per_kWh = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
@@ -880,7 +891,7 @@ class Tariffs:
                     print(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
-            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], energy_data: dict) -> float:
+            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], energy_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
                 """
                 Calculate total cost of operation over a time period using average power usage.
 
@@ -894,8 +905,13 @@ class Tariffs:
                 """
                 # Use default tariff
                 tariff_id = self.tariff_id
+                # If no energy_data is given use class set data
+                if energy_data_input is not None:
+                    energy_data = energy_data_input
+                else:
+                    energy_data = self.energy_data
                 # Calculate mean power usage from the provided power data (e.g., from "peak" values)
-                power_mean = self.get_mean(energy_data["kW"])
+                energy_mean = self.get_mean(energy_data)
 
                 # If time_duration is a string, convert it to a timedelta
                 if isinstance(time_duration, str):
@@ -923,7 +939,7 @@ class Tariffs:
                         # Extract and sum price values from all components (e.g., grid cost, tax, etc.)
                         hour_price = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
                         # Multiply hourly price by average power usage to get cost for this hour
-                        total_price += hour_price * power_mean
+                        total_price += hour_price * energy_mean
 
                     except Exception:
                         # If an error occurs (e.g., missing price data), assume operation fails and set cost to infinite
@@ -945,14 +961,14 @@ class Tariffs:
             """
             tariff_id = None
             power_data = [{"datetime":None,"peak":None}]
-            def __init__(self,parent = None) -> None:
+            def __init__(self,parent) -> None:
                 """
                 Initializes the Power class with a reference to its parent Price instance.
 
                 Args:
                     parent (Price): Instance of the parent class Price.
                 """
-                if parent != None:
+                if parent is not None:
                     self.parent = parent
                 else:
                     self.parent = Tariffs.Price
@@ -969,7 +985,7 @@ class Tariffs:
                     self.tariff_id = tariff_id
                     return
 
-            def set_data(self, power_data_input: Union[dict[str, Union[str, float]], list[dict[str, Union[str, float]]]]) -> list[dict[str, Union[str, float]]]:
+            def set_data(self, power_data_input: list[dict[str, Union[str, float]]]) -> list[dict[str, Union[str, float]]]:
                 """
                 Accepts and stores power data.
 
@@ -1003,7 +1019,7 @@ class Tariffs:
                     elif isinstance(dp, (tuple, list)) and len(dp) == 2:
                         dt, kW = dp
                         if isinstance(dt, datetime.datetime):
-                            cleaned_data.append({"datetime": dt.isoformat(), "power_data": kW})
+                            cleaned_data.append({"datetime": dt.isoformat(), "kW": kW})
                         else:
                             raise ValueError("Tuple must have datetime.datetime as first element")
                     else:
@@ -1023,7 +1039,7 @@ class Tariffs:
                 )
                 return self.power_data
 
-            def get_mean(self,power_data: list[float]) -> float:
+            def get_mean(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> float:
                 """
                 Calculate the mean power value from a list of values.
 
@@ -1033,10 +1049,18 @@ class Tariffs:
                 Returns:
                     float: Mean value.
                 """
-                mean_value = sum(power_data)/len(power_data)
+                if power_data_input is not None:
+                    power_data = power_data_input
+                else:
+                    power_data = self.power_data
+
+                if not power_data or not isinstance(power_data, list):
+                    raise ValueError("Energy data must be a non-empty list of dicts.")
+
+                mean_value = sum(d["kW"] for d in power_data) / len(power_data)
                 return mean_value
             
-            def get_duration(self, power_data_input: Optional[list[dict[str, Union[str, float]]]]) -> datetime.timedelta:
+            def get_duration(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.timedelta:
                 """
                 Calculate duration between first and last timestamps in the data.
 
@@ -1047,7 +1071,7 @@ class Tariffs:
                     datetime.timedelta: Duration.
                 """
 
-                if power_data_input != None:
+                if power_data_input is not None:
                     power_data = power_data_input
                 else:
                     power_data = self.power_data
@@ -1156,7 +1180,7 @@ class Tariffs:
 
                 raise ValueError("Could not extract costFunction from the input object.")
 
-            def get_optimal_start(self, power_data: Optional[list[float]]) -> datetime.datetime:
+            def get_optimal_start(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.datetime:
                 """
                 Finds the optimal start time within the next 24h that minimizes
                 total power cost based on provided or stored power data.
@@ -1171,10 +1195,12 @@ class Tariffs:
                     ValueError: If input data is missing or invalid.
                 """
                 #print(f"in optimal_start. power_data={power_data} ")
-                if power_data is None:
+                if power_data_input is None:
                     power_data = self.power_data
+                else: 
+                    power_data = power_data_input
 
-                if len(power_data) < 2:
+                if not isinstance(power_data, list) or len(power_data) < 2:
                     raise ValueError("Not enough data points to calculate duration.")
 
                 # Calculate duration from first to last timestamp
@@ -1244,7 +1270,7 @@ class Tariffs:
                     tariff_id = self.tariff_id
 
                     # Fetch power price components at the given time
-                    power_components = self.parent.get_power_price(self.parent,tariff_id, now)
+                    power_components = self.parent.get_power_price(tariff_id, now)
 
                     # Sum up all price components (e.g., power, grid fee, taxes, etc.)
                     price_per_kWh = sum(self.extract_price_value(comp["price"]) for comp in power_components)
@@ -1258,22 +1284,27 @@ class Tariffs:
                     print(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
-            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], power_data: dict) -> float:
+            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], power_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
                 """
                 Calculate total cost of operation over a time period using average power usage.
 
                 Args:
                     start_time (datetime.datetime): Start time of the operation.
                     time_duration (str or timedelta): Duration of the operation.
-                    power_data (dict): Dictionary with 'peak' key containing list of power values.
+                    power_data (dict): Dictionary with 'kW' key containing list of power values.
 
                 Returns:
                     float: Total cost over the operation period.
                 """
                 # Use default tariff
                 tariff_id = self.tariff_id
+                # If no data given use the set class data list
+                if power_data_input is not None:
+                    power_data = power_data_input
+                else:
+                    power_data = self.power_data
                 # Calculate mean power usage from the provided power data (e.g., from "peak" values)
-                power_mean = self.get_mean(power_data["kW"])
+                power_mean = self.get_mean(power_data)
 
                 # If time_duration is a string, convert it to a timedelta
                 if isinstance(time_duration, str):
