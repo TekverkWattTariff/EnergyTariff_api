@@ -3,7 +3,7 @@ import sys
 import os
 import datetime
 import json
-from typing import Optional, Union
+from typing import Optional, Union, Protocol
 
 # Add OpenAPI-generated path for imports
 sys.path.append(os.path.abspath("Openapi/GeneratedApiFiles"))
@@ -31,11 +31,11 @@ class Tariffs:
         power_data (list): Internal list of power data points used for optimization.
     """
     v = "V0"
-    url = None
-    tariff_id= None
-    api_instance = None
+    url = str
+    tariff_id = str
+    api_instance = tariff_api.TariffApi
     
-    def __init__(self,v,url = None,tariff_id = None) -> None:
+    def __init__(self,v,url: Optional[str],tariff_id: Optional[str]) -> None:
         """
         Initializes the Tariffs class with API connection.
 
@@ -286,17 +286,17 @@ class Tariffs:
         - Extract individual price types (fixed, energy, power).
         - Support power optimization logic via the Power subclass.
         """
-        api_PriceInstant = None
-        tariff_id = None
+        api_PriceInstant = tariff_api.TariffApi
+        tariff_id = str
 
-        def __init__(self,parent=None) -> None:
+        def __init__(self,parent = None) -> None:
             """
             Initializes the price class with a reference to its parent Tariff instance.
 
             Args:
                 parent (Tariff): Instance of the parent class Tariff.
             """
-            if parent != None:
+            if parent is not None:
                     self.parent = parent
             else:
                 self.parent = Tariffs
@@ -566,9 +566,9 @@ class Tariffs:
             - Calculating durations and averages.
             - Finding optimal start times for minimizing energy costs.
             """
-            tariff_id = None
+            tariff_id = str
             energy_data = [{"datetime":None,"kW":None}]
-            def __init__(self,parent=None) -> None:
+            def __init__(self,parent = None) -> None:
                 """
                 Initializes the Energy class with a reference to its parent Price instance.
 
@@ -945,7 +945,7 @@ class Tariffs:
             """
             tariff_id = None
             power_data = [{"datetime":None,"peak":None}]
-            def __init__(self,parent=None) -> None:
+            def __init__(self,parent = None) -> None:
                 """
                 Initializes the Power class with a reference to its parent Price instance.
 
