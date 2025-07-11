@@ -10,7 +10,9 @@ url = "https://api.tekniskaverken.net/subscription/public/v0/tariffs"
 Tariff = api_InteractionLayer.Tariffs("v0",url)
 Tariff2 = api_InteractionLayer.Tariffs("V0")
 Price = Tariff.Price(Tariff)
-Power = Price.Power(Price)
+Energy = Price.Energy()
+Power = Price.Power()
+
 #print(f"{tariff.get_api_teriffs_names()}") #debugg
 tariffs = Tariff.get_tariffs()
 path = "C://Users/Local/Desktop/Projekts/Test/tariffs-response_tekniska-verken.json"
@@ -91,3 +93,6 @@ Power.set_id(id)
 power_data = Power.set_data(power_raw_data)
 start_time = Power.get_optimal_start(power_data)
 print(f"Optimal time to start: {start_time}")
+time = "4:30"
+operatianal_cost = Energy.get_operation_cost(now,"4:30")
+print(f"Cost of using energy for {time}")
