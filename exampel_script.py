@@ -94,5 +94,6 @@ power_data = Power.set_data(power_raw_data)
 start_time = Power.get_optimal_start(power_data)
 print(f"Optimal time to start: {start_time}")
 time = "4:30"
-operatianal_cost = Energy.get_operation_mean_cost(now,"4:30",power_data)
-print(f"Cost of using energy for {time}")
+Energy.set_id(id)
+operatianal_cost = Energy.get_operation_mean_cost(now,"4:30:00",power_data)
+print(f"Cost of using energy for {time} is {operatianal_cost}")

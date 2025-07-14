@@ -1,9 +1,12 @@
 """This code initializes the API client and defines functions based on the tariff API"""
 import sys
 import os
+import time
 import datetime
 import json
-from typing import Optional, Union, Protocol
+from typing import Optional, Union
+import threading
+import queue as q 
 
 # Add OpenAPI-generated path for imports
 sys.path.append(os.path.abspath("Openapi/GeneratedApiFiles"))
@@ -30,11 +33,11 @@ class Tariffs:
         api_instance (TariffApi): Initialized API client instance for tariff operations.
         power_data (list): Internal list of power data points used for optimization.
     """
-    v = "V0"
-    url = str
-    tariff_id = str
+    v = "v0"
+    url = None
+    tariff_id = None
     api_instance = tariff_api.TariffApi
-    
+
     def __init__(self,v,url: Optional[str] = None,tariff_id: Optional[str] = None) -> None:
         """
         Initializes the Tariffs class with API connection.
@@ -46,11 +49,17 @@ class Tariffs:
         """
         self.price = self.Price(self)  # Initialize Price as a subcomponent
         self.v = v
-        self.tariff_id = self.set_id(tariff_id)
+        if tariff_id is not None:
+            self.set_id(tariff_id)
         if url is not None:
             url = url.replace("/v0/tariffs", "")
         self.url = url
-
+        #saves the latest update
+        self.last_updated = None
+        self.cost_queue = q.Queue()  # to hold the latest cost value
+        # Queues for storing updated data safely across threads
+        self.tariffs_queue = q.Queue()
+        self.single_tariff_queue = q.Queue()
         # Create OpenAPI configuration
         config = Configuration(host=url)
 
@@ -58,6 +67,7 @@ class Tariffs:
         client = ApiClient(configuration=config)
         self.api_instance = tariff_api.TariffApi(api_client=client)
         #print(f"api_instance type: {type(self.api_instance)}") #Debugg
+        self.tariffs = self.get_tariffs()
         pass
     
     def set_json_path(self, path: str) -> None:
@@ -78,7 +88,7 @@ class Tariffs:
         Returns:
             str: Company name.
         """
-        self.chek_id(tariff_id)
+        self.check_id(tariff_id)
         tariff = self.get_tariff(tariff_id)
         return tariff.company_name
     
@@ -150,7 +160,9 @@ class Tariffs:
             object | None: Tariff object if found, otherwise None.
         """
         tariffs = []
-        self.chek_id(tariff_id)
+        check = self.check_id(tariff_id)
+        if not check:
+            raise Exception(f"Tariff ID {tariff_id} does not exist.")
         if self.url:
             # Try to fetch from API if URL is provided
             try:
@@ -234,10 +246,13 @@ class Tariffs:
         Args:
             tariff_id (str): Tariff ID to set.
         """
+        check = self.check_id(tariff_id)
+        if not check:
+            raise Exception(f"Tariff ID {tariff_id} does not exist.")
         self.tariff_id = tariff_id
         return
 
-    def chek_id(self, tariff_id: str) -> bool:
+    def check_id(self, tariff_id: str) -> bool:
         """
         Check if the given tariff ID exists in the API.
 
@@ -276,7 +291,111 @@ class Tariffs:
         if index is None:
             raise ValueError("No matching tariff found for the given name and company.")
         return self.get_id(index)
-    
+    #==========================Continuous Functions============================
+    def _update_tariffs_loop(self, interval_seconds: int):
+        """
+        Background loop that periodically fetches all tariffs.
+
+        This function runs in a separate thread and continuously updates tariff data
+        at a fixed interval, placing the latest result in a queue.
+
+        Args:
+            interval_seconds (int): Number of seconds between each update cycle.
+        """
+        while True:
+            try:
+                tariffs = self.get_tariffs()
+                self.tariffs_queue.put(tariffs)
+                print(f"[{datetime.datetime.now()}] Tariffs updated.")
+            except Exception as e:
+                print(f"Error during tariffs update: {e}")
+            time.sleep(interval_seconds)
+
+    def _update_single_tariff_loop(self, tariff_id: str, time_interval: datetime.timedelta):
+        """
+        Background loop to periodically update a specific tariff.
+
+        Continuously checks if the time interval has passed, and if so, fetches
+        an updated version of the specified tariff and places it in a queue.
+
+        Args:
+            tariff_id (str): The ID of the tariff to update.
+            time_interval (datetime.timedelta): Minimum duration to wait between updates.
+        """
+        while True:
+            now = datetime.datetime.now()
+            if self.last_updated is None or now - self.last_updated >= time_interval:
+                try:
+                    tariff = self.get_tariff(tariff_id)
+                    self.single_tariff_queue.put(tariff)
+                    self.last_updated = now
+                    print(f"[{now}] Tariff '{tariff_id}' updated.")
+                except Exception as e:
+                    print(f"Error during single tariff update: {e}")
+            time.sleep(time_interval.total_seconds())
+    #To use continus API interactions use this
+    def start_tariffs_background_update(self, interval_seconds: int = 60):
+        """
+        Starts a background thread that regularly updates all tariffs.
+
+        Args:
+            interval_seconds (int): Time interval between updates (in seconds).
+        """
+        thread = threading.Thread(
+            target=self._update_tariffs_loop,
+            args=(interval_seconds,),
+            daemon=True
+        )
+        thread.start()
+
+    def start_single_tariff_background_update(self, tariff_id: Optional[str] = None, time_interval: datetime.timedelta = datetime.timedelta(minutes=1)):
+        """
+        Starts a background thread that updates a single tariff on a time interval.
+
+        Args:
+            tariff_id (str, optional): ID of the tariff to update. Defaults to class value.
+            time_interval (timedelta): Time between updates.
+
+        Raises:
+            ValueError: If no tariff_id is given or it does not exist.
+        """
+        if tariff_id is None:
+            if self.tariff_id is not None:
+                tariff_id = self.tariff_id
+            else:
+                raise ValueError("No tariff_id provided or set.")
+        elif not self.check_id(tariff_id):
+            raise ValueError(f"Tariff ID '{tariff_id}' does not exist.")
+
+        thread = threading.Thread(
+            target=self._update_single_tariff_loop,
+            args=(tariff_id, time_interval),
+            daemon=True
+        )
+        thread.start()
+    #After thred is startet use this functions
+    def get_latest_tariffs(self):
+        """
+        Returns the most recently fetched full tariffs, if available.
+
+        Returns:
+            list | None: Latest tariffs or None if queue is empty.
+        """
+        if not self.tariffs_queue.empty():
+            return self.tariffs_queue.get()
+        return None
+
+    def get_latest_single_tariff(self):
+        """
+        Returns the most recently updated single tariff, if available.
+
+        Returns:
+            object | None: Latest tariff object or None if queue is empty.
+        """
+        if not self.single_tariff_queue.empty():
+            return self.single_tariff_queue.get()
+        return None
+
     class Price:
         """
         Class for handling price-related logic, including retrieving time-based
@@ -290,17 +409,17 @@ class Tariffs:
         api_PriceInstant = tariff_api.TariffApi
         tariff_id = str
 
-        def __init__(self,parent = None) -> None:
+        def __init__(self,parent) -> None:
             """
             Initializes the price class with a reference to its parent Tariff instance.
 
             Args:
                 parent (Tariff): Instance of the parent class Tariff.
             """
-            if parent is not None:
-                    self.parent = parent
-            else:
-                self.parent = Tariffs
+            self.parent = parent
+            self.last_updated = None
+            self.cost_queue = q.Queue()  # to hold the latest cost value
+            self.energy = self.Energy(self) # Initialize Energy as a subcomponent
             self.power = self.Power(self)  # Initialize Power as a subcomponent
             self.set_id(parent.tariff_id)
             return
@@ -378,7 +497,6 @@ class Tariffs:
             Returns:
                 list: List of price components.
             """
-            self.parent.chek_id(tariff_id)
             tariff = self.parent.get_tariff(tariff_id)
             components = getattr(tariff.fixed_price, "components", [])
 
@@ -434,10 +552,13 @@ class Tariffs:
             Returns:
                 list: List of price components.
             """
-            self.parent.chek_id(tariff_id)
-            tariff = self.parent.get_tariff(tariff_id)
-            components = getattr(tariff.energy_price, "components", [])
-
+            try:
+                tariff = self.parent.get_tariff(tariff_id)
+                components = getattr(tariff.energy_price, "components", [])
+            except Exception as e:
+                print(f"[ERROR] Failed in get_energy_price: {e}")
+                raise e
+            
             matching_components = []
 
             for comp in components:
@@ -476,7 +597,6 @@ class Tariffs:
                     }
 
                     matching_components.append(component_data)
-
             return matching_components
         
         def get_power_price(self, tariff_id: str, datetime_input: datetime.datetime) -> list[dict]:
@@ -490,7 +610,6 @@ class Tariffs:
             Returns:
                 list: List of price components.
             """
-            self.parent.chek_id(tariff_id)
             tariff = self.parent.get_tariff(tariff_id)
             components = getattr(tariff.power_price, "components", [])
 
@@ -557,7 +676,8 @@ class Tariffs:
                 "energy_price": energy_price,
                 "power_price": power_price
             }
-
+        #==========================Continuous Functions============================
+       
         class Energy:
             """
             Subclass of Price for energy data handling and optimization logic.
@@ -576,10 +696,9 @@ class Tariffs:
                 Args:
                     parent (Price): Instance of the parent class Price.
                 """
-                if parent is not None:
-                    self.parent = parent
-                else:
-                    self.parent = Tariffs.Price
+                self.parent = parent
+                self.last_updated = None
+                self.cost_queue = q.Queue()  # to hold the latest cost value
                 self.set_id(parent.tariff_id)
                 pass
 
@@ -897,12 +1016,15 @@ class Tariffs:
 
                 Args:
                     start_time (datetime.datetime): Start time of the operation.
-                    time_duration (str or timedelta): Duration of the operation.
+                    time_duration (str or timedelta): Duration of the operation
+                    if str input ex: hh:mm:ss.
                     power_data (dict): Dictionary with 'peak' key containing list of power values.
 
                 Returns:
                     float: Total cost over the operation period.
                 """
+                if self.tariff_id is None:
+                    raise Exception("No tariff_id is set for energy class")
                 # Use default tariff
                 tariff_id = self.tariff_id
                 # If no energy_data is given use class set data
@@ -935,7 +1057,7 @@ class Tariffs:
                 while current_time <= end_time:
                     try:
                         # Retrieve power price components for the current hour
-                        energy_components = self.parent.get_energy_price(self.parent,tariff_id,current_time)
+                        energy_components = self.parent.get_energy_price(tariff_id,current_time)
                         # Extract and sum price values from all components (e.g., grid cost, tax, etc.)
                         hour_price = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
                         # Multiply hourly price by average power usage to get cost for this hour
@@ -949,7 +1071,41 @@ class Tariffs:
                     current_time += datetime.timedelta(hours=1)
                 # Return total cost for the time interval
                 return total_price
-            
+
+            #==========================Continuous Functions============================
+            def _cost_update_loop(self, kW, interval_seconds):
+                """
+                Update function for cost
+                """
+                while True:
+                    now = datetime.datetime.now()
+                    try:
+                        cost = self.get_cost(now, kW)
+                        self.last_updated = now
+                        self.cost_queue.put(cost)  # Store cost in queue
+                    except Exception as e:
+                        raise ValueError(f"Error during cost update: {e}")
+                    time.sleep(interval_seconds)
+
+            def start_background_cost_updates(self, kW: float, interval_seconds: int = 60):
+                """
+                Starts a background thread that updates the cost every `interval_seconds` seconds.
+                """
+                thread = threading.Thread(
+                    target=self._cost_update_loop,
+                    args=(kW, interval_seconds),
+                    daemon=True  # Stops when the main program ends
+                )
+                thread.start()
+            #After starting threds use the get funtions
+            def get_latest_cost(self):
+                """
+                Retrieves the most recent cost from the queue, if available.
+                """
+                if not self.cost_queue.empty():
+                    return self.cost_queue.get()
+                return None
+
         class Power:
             """
             Subclass of Price for power data handling and optimization logic.
@@ -968,10 +1124,9 @@ class Tariffs:
                 Args:
                     parent (Price): Instance of the parent class Price.
                 """
-                if parent is not None:
-                    self.parent = parent
-                else:
-                    self.parent = Tariffs.Price
+                self.parent = parent
+                self.last_updated = None
+                self.cost_queue = q.Queue()  # to hold the latest cost value
                 self.set_id(parent.tariff_id)
                 pass
 
@@ -1342,3 +1497,37 @@ class Tariffs:
                     current_time += datetime.timedelta(hours=1)
                 # Return total cost for the time interval
                 return total_price
+
+            #==========================Continuous Functions============================
+            def _cost_update_loop(self, kW, interval_seconds):
+                """
+                Update function for cost
+                """
+                while True:
+                    now = datetime.datetime.now()
+                    try:
+                        cost = self.get_cost(now, kW)
+                        self.last_updated = now
+                        self.cost_queue.put(cost)  # Store cost in queue
+                    except Exception as e:
+                        raise ValueError(f"Error during cost update: {e}")
+                    time.sleep(interval_seconds)
+
+            def start_background_cost_updates(self, kW: float, interval_seconds: int = 60):
+                """
+                Starts a background thread that updates the cost every `interval_seconds` seconds.
+                """
+                thread = threading.Thread(
+                    target=self._cost_update_loop,
+                    args=(kW, interval_seconds),
+                    daemon=True  # Stops when the main program ends
+                )
+                thread.start()
+            #After starting threds use the get funtions
+            def get_latest_cost(self):
+                """
+                Retrieves the most recent cost from the queue, if available.
+                """
+                if not self.cost_queue.empty():
+                    return self.cost_queue.get()
+                return None
