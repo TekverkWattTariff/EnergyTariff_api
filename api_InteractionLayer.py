@@ -1164,7 +1164,7 @@ class Tariffs:
                         #print(f"[{now}] Energy data recorded: {kW} kW") # Debugg
                     except Exception as e:
                         #print(f"Error during energy data recording: {e}") # Debugg
-                    time.sleep(interval_seconds)
+                        time.sleep(interval_seconds)
 
             # Functions to start the background thread
             def start_background_energy_recording(self, kW: float, interval_seconds: int = 60):
