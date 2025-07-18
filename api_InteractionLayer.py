@@ -1,10 +1,13 @@
 """This code initializes the API client and defines functions based on the tariff API"""
+import math
 import sys
 import os
 import time
 import datetime
+import isodate
 import json
 from typing import Optional, Union
+from dateutil.parser import isoparse
 import threading
 import queue as q 
 
@@ -15,7 +18,8 @@ sys.path.append(os.path.abspath("Openapi/GeneratedApiFiles"))
 from Openapi.GeneratedApiFiles.openapi_client.api_client import ApiClient
 from Openapi.GeneratedApiFiles.openapi_client.configuration import Configuration
 from Openapi.GeneratedApiFiles.openapi_client.api import tariff_api
-#from Openapi.GeneratedApiFiles.openapi_client.exceptions import NotFoundException
+#==========================For Helper Functions============================
+from Openapi.GeneratedApiFiles.openapi_client.models.tariff import Tariff
 
 class Tariffs:
     """
@@ -34,41 +38,53 @@ class Tariffs:
         power_data (list): Internal list of power data points used for optimization.
     """
     v = "v0"
-    url = None
-    tariff_id = None
+    url = ""
+    tariff_id = ""
     api_instance = tariff_api.TariffApi
+    _json_path = ""
 
-    def __init__(self,v,url: Optional[str] = None,tariff_id: Optional[str] = None) -> None:
+    def __init__(self, v: str, url: Optional[str] = None, json_path: Optional[str] = None, tariff_id: Optional[str] = None) -> None:
         """
-        Initializes the Tariffs class with API connection.
+        Initialize the Tariffs class with API configuration.
+
+        If no URL is provided, it will attempt to load data from the JSON path.
+        If neither are provided, an error is raised.
 
         Args:
-            v (str): API version.
-            url (str): Base URL of the API.
-            tariff_id (str, optional): Optional default tariff ID to use.
+            v (str): API version to use.
+            url (Optional[str]): API base URL. If None, a JSON file must be provided.
+            json_path (Optional[str]): Path to a local JSON file with tariff data.
+            tariff_id (Optional[str]): Optional default tariff ID to set.
         """
-        self.price = self.Price(self)  # Initialize Price as a subcomponent
         self.v = v
-        if tariff_id is not None:
-            self.set_id(tariff_id)
-        if url is not None:
-            url = url.replace("/v0/tariffs", "")
-        self.url = url
-        #saves the latest update
+        self._json_path = json_path
+        self.tariff_id = tariff_id
         self.last_updated = None
-        self.cost_queue = q.Queue()  # to hold the latest cost value
-        # Queues for storing updated data safely across threads
+        self.cost_queue = q.Queue()
         self.tariffs_queue = q.Queue()
         self.single_tariff_queue = q.Queue()
-        # Create OpenAPI configuration
-        config = Configuration(host=url)
 
-        # Initialize API client
-        client = ApiClient(configuration=config)
-        self.api_instance = tariff_api.TariffApi(api_client=client)
-        #print(f"api_instance type: {type(self.api_instance)}") #Debugg
-        self.tariffs = self.get_tariffs()
-        pass
+        # Initialize nested classes
+        self.price = self.Price(self)
+        self.energy = self.price.Energy(self.price)
+        self.power = self.price.Power(self.price)
+
+        if url:
+            clean_url = url.replace("/v0/tariffs", "")
+            self.url = clean_url
+            config = Configuration(host=clean_url)
+            client = ApiClient(configuration=config)
+            self.api_instance = tariff_api.TariffApi(api_client=client)
+            self.tariffs = self.get_tariffs()  # API mode
+        elif json_path:
+            self.url = None
+            self.api_instance = None
+            self.tariffs = self.get_tariffs_byJson(json_path)  # JSON mode
+        else:
+            raise ValueError("No URL or JSON path provided.")
+
+        if tariff_id is not None:
+            self.set_id(tariff_id)
     
     def set_json_path(self, path: str) -> None:
         """Sets the local JSON file path to be used as fallback or source."""
@@ -76,7 +92,7 @@ class Tariffs:
 
     def get_json_path(self) -> str:
         """Gets the currently set JSON file path."""
-        return self._json_path
+        return self._json_path # type: ignore
 
     def get_company(self, tariff_id: str) -> str:
         """
@@ -90,7 +106,7 @@ class Tariffs:
         """
         self.check_id(tariff_id)
         tariff = self.get_tariff(tariff_id)
-        return tariff.company_name
+        return tariff.company_name # type: ignore
     
     def get_companys(self) -> list[str]:
         """
@@ -106,15 +122,26 @@ class Tariffs:
 
     def get_tariffs(self) -> list:
         """
-        Fetch all available tariffs from the live API.
+        Retrieve all available tariffs.
+
+        If a JSON path is set, it loads tariffs from that file.
+        Otherwise, it fetches from the live API endpoint.
 
         Returns:
-            list: List of tariff objects.
+            list: A list of tariff objects.
         """
-        response = self.api_instance.get_tariffs(self.v)
-        #print("DEBUG - API response:", response)
-        return response.tariffs
-
+        if self._json_path is None:
+            response = self.api_instance.get_tariffs(self.v) # type: ignore
+            return response.tariffs # type: ignore
+        else:
+            raw_tariffs = self.get_tariffs_byJson(self._json_path)
+            tariffs = []
+            for t in raw_tariffs:
+                obj = self.dict_to_tariff(t)
+                if obj is not None:
+                    tariffs.append(obj)
+            return tariffs
+        
     def get_tariffs_byJson(self, path: str) -> list:
         """
         Fetch tariffs from a local JSON file.
@@ -151,32 +178,19 @@ class Tariffs:
 
     def get_tariff(self, tariff_id: Optional[str] = None) -> Optional[object]:
         """
-        Retrieve a tariff object by ID from the API or JSON fallback.
+        Retrieve a specific tariff object based on its ID.
 
         Args:
-            tariff_id (str, optional): The tariff ID to look up.
+            tariff_id (Optional[str]): Tariff ID to search for. If None, uses self.tariff_id.
 
         Returns:
-            object | None: Tariff object if found, otherwise None.
+            Optional[object]: Tariff object if found, otherwise None.
         """
         tariffs = []
-        check = self.check_id(tariff_id)
+        check = self.check_id(tariff_id) # type: ignore
         if not check:
             raise Exception(f"Tariff ID {tariff_id} does not exist.")
-        if self.url:
-            # Try to fetch from API if URL is provided
-            try:
-                tariffs = self.get_tariffs()
-            except Exception as e:
-                print(f"ERROR - Failed to fetch from API: {e}")
-                return None
-        else:
-            # No URL provided, fall back to JSON file
-            path = self.get_json_path()
-            if path is None:
-                raise Exception("ERROR - No path is sett - use set_json_path to use a json file")
-            tariffs = self.get_tariffs_byJson(path)
-
+        tariffs = self.get_tariffs()
         for tariff in tariffs:
             tariff_id_value = getattr(tariff, 'id', None) or getattr(tariff, 'tariff_id', None)
             if tariff_id_value == tariff_id:
@@ -196,7 +210,7 @@ class Tariffs:
             object: Tariff object.
         """
         tariff_id = self.get_id_byName(tariff_name,company)
-        response = self.api_instance.get_tariff_by_id(self.v,tariff_id)
+        response = self.api_instance.get_tariff_by_id(self.v,tariff_id)# type: ignore
         return response.tariff
     
     def get_tariffs_ids(self) -> list[str]:
@@ -235,8 +249,10 @@ class Tariffs:
             IndexError: If the index is out of range.
         """
         tariffs = self.get_tariffs()
+
         if 0 <= index < len(tariffs):
-            return tariffs[index].id
+            tariff_id = tariffs[index].id
+            return tariff_id
         raise IndexError("Index out of range")
     
     def set_id(self, tariff_id: str) -> None:
@@ -254,16 +270,27 @@ class Tariffs:
 
     def check_id(self, tariff_id: str) -> bool:
         """
-        Check if the given tariff ID exists in the API.
+        Check whether the given tariff ID exists among available tariffs.
 
         Args:
-            tariff_id (str): Tariff ID to check.
+            tariff_id (str): The tariff ID to verify.
 
         Returns:
-            bool: True if found, False otherwise.
+            bool: True if tariff exists, False otherwise.
         """
         tariffs = self.get_tariffs()
-        return any(t.id == tariff_id for t in tariffs)
+
+        # Extrahera alla tillgängliga ID:n (använd .id om objekt, annars dict)
+        available_ids = [
+            getattr(t, 'id', None) if not isinstance(t, dict) else t.get('id')
+            for t in tariffs
+        ]
+
+        # Debug: visa vilka ID:n som finns
+        #print("Available tariff IDs:", available_ids)
+        #print("Checking for tariff_id:", tariff_id)
+
+        return tariff_id in available_ids
 
     def get_id_byName(self, tariff_name: str, company: str) -> str:
         """
@@ -329,11 +356,11 @@ class Tariffs:
                     tariff = self.get_tariff(tariff_id)
                     self.single_tariff_queue.put(tariff)
                     self.last_updated = now
-                    print(f"[{now}] Tariff '{tariff_id}' updated.")
+                    #print(f"[{now}] Tariff '{tariff_id}' updated.")
                 except Exception as e:
-                    print(f"Error during single tariff update: {e}")
+                    raise ValueError(f"Error during single tariff update: {e}")
             time.sleep(time_interval.total_seconds())
-    #To use continus API interactions use this
+    #To use continus API interactions
     def start_tariffs_background_update(self, interval_seconds: int = 60):
         """
         Starts a background thread that regularly updates all tariffs.
@@ -395,17 +422,49 @@ class Tariffs:
         if not self.single_tariff_queue.empty():
             return self.single_tariff_queue.get()
         return None
+    #==========================Helper Functions============================
+    def dict_to_tariff(self, data: dict) -> Tariff:
+        try:
+            # Clean ISO date with timezone
+            last_updated = isoparse(data.get("lastUpdated")) if data.get("lastUpdated") else None # type: ignore
+
+            # Construct raw dicts for nested models
+            valid_period_dict = {
+                "from_including": data["validPeriod"]["fromIncluding"],
+                "to_excluding": data["validPeriod"]["toExcluding"]
+            } if "validPeriod" in data else None
+
+            tariff_data = {
+                "id": data.get("id"),
+                "name": data.get("name"),
+                "description": data.get("description"),
+                "product": data.get("product"),
+                "company_name": data.get("companyName"),
+                "company_org_no": data.get("companyOrgNo"),
+                "direction": data.get("direction"),
+                "time_zone": data.get("timeZone"),
+                "last_updated": last_updated,
+                "valid_period": valid_period_dict,
+                "billing_period": data.get("billingPeriod"),
+                "fixed_price": data.get("fixedPrice"),
+                "energy_price": data.get("energyPrice"),
+                "power_price": data.get("powerPrice"),
+            }
+
+            return Tariff(**tariff_data)
+
+        except Exception as e:
+            print(f"[ERROR] Failed to convert dict to Tariff: {e}")
+            return None # type: ignore
 
     class Price:
         """
-        Class for handling price-related logic, including retrieving time-based
-        fixed, energy, and power pricing from tariff definitions.
+        Container class for price-related logic (fixed, energy, power).
 
-        Provides utility methods to:
-        - Retrieve current price components for a given datetime.
-        - Extract individual price types (fixed, energy, power).
-        - Support power optimization logic via the Power subclass.
+        This class holds submodules to calculate or retrieve prices and cost calculations
+        for energy and power based on a specific tariff.
         """
+
         api_PriceInstant = tariff_api.TariffApi
         tariff_id = str
 
@@ -417,11 +476,13 @@ class Tariffs:
                 parent (Tariff): Instance of the parent class Tariff.
             """
             self.parent = parent
-            self.last_updated = None
-            self.cost_queue = q.Queue()  # to hold the latest cost value
             self.energy = self.Energy(self) # Initialize Energy as a subcomponent
             self.power = self.Power(self)  # Initialize Power as a subcomponent
+
+            self.last_updated = None
+            self.cost_queue = q.Queue()  # to hold the latest cost value
             self.set_id(parent.tariff_id)
+
             return
         
         def set_id(self, tariff_id: str) -> None:
@@ -451,8 +512,8 @@ class Tariffs:
             for comp in components:
                 valid_ok = True
                 if hasattr(comp, "valid_period"):
-                    valid_from = comp.valid_period.from_including
-                    valid_to = comp.valid_period.to_excluding
+                    valid_from = comp.valid_period.from_including # type: ignore
+                    valid_to = comp.valid_period.to_excluding # type: ignore
 
                     if isinstance(valid_from, str):
                         valid_from = datetime.datetime.strptime(valid_from, "%Y-%m-%d").date()
@@ -465,11 +526,11 @@ class Tariffs:
                     continue
 
                 # If no recurring_periods, component is always active
-                if not hasattr(comp, "recurring_periods") or not comp.recurring_periods:
+                if not hasattr(comp, "recurring_periods") or not comp.recurring_periods: # type: ignore
                     return comp
 
                 # Check if the time is within any active recurring periods
-                for period in comp.recurring_periods:
+                for period in comp.recurring_periods: # type: ignore
                     for active in period.active_periods:
                         from_time = datetime.datetime.strptime(active.from_including, "%H:%M:%S").time()
                         to_time = datetime.datetime.strptime(active.to_excluding, "%H:%M:%S").time()
@@ -647,7 +708,8 @@ class Tariffs:
                         "name": getattr(comp, "name", ""),
                         "price": price_data,
                         "pricedPeriod": getattr(comp, "pricedPeriod", "P1M"),
-                        "costFunction": getattr(tariff.power_price,"costFunction",None)
+                        "costFunction": getattr(tariff.power_price,"costFunction",None),
+                        "peakIdentificationSettings": getattr(comp, "peak_identification_settings", None)
                     }
 
                     matching_components.append(component_data)
@@ -676,16 +738,108 @@ class Tariffs:
                 "energy_price": energy_price,
                 "power_price": power_price
             }
-        #==========================Continuous Functions============================
-       
+        #==========================Helper Functions================================
+        def extract_price_value(self, price_obj: Union[dict, object]) -> float:
+            """
+            Extracts a numeric price (preferably including VAT) from a dict or object.
+
+            Args:
+                price_obj (dict or object): A price dictionary or object.
+
+            Returns:
+                float: Extracted price value.
+
+            Raises:
+                ValueError: If no valid price could be found.
+            """
+            # Helper to normalize dict keys (lowercase, remove underscores)
+            def normalize_key(k: str) -> str:
+                return k.replace("_", "").lower()
+
+            if isinstance(price_obj, dict):
+                # Normalize keys
+                norm = {normalize_key(k): v for k, v in price_obj.items()}
+                if "priceincvat" in norm:
+                    return float(norm["priceincvat"])
+                elif "priceexvat" in norm:
+                    return float(norm["priceexvat"])
+
+            # Object with 'price' attribute
+            try:
+                price_attr = price_obj.price  # type: ignore
+                if isinstance(price_attr, (float, int)):
+                    return float(price_attr)
+                elif isinstance(price_attr, dict):
+                    norm = {normalize_key(k): v for k, v in price_attr.items()}
+                    if "priceincvat" in norm:
+                        return float(norm["priceincvat"])
+                    elif "priceexvat" in norm:
+                        return float(norm["priceexvat"])
+            except AttributeError:
+                pass
+
+            # Object is a wrapper with a 'price' key that contains a dict
+            try:
+                price_data = price_obj["price"]  # type: ignore
+                if isinstance(price_data, (float, int)):
+                    return float(price_data)
+                elif isinstance(price_data, dict):
+                    norm = {normalize_key(k): v for k, v in price_data.items()}
+                    if "priceincvat" in norm:
+                        return float(norm["priceincvat"])
+                    elif "priceexvat" in norm:
+                        return float(norm["priceexvat"])
+            except (TypeError, KeyError):
+                pass
+
+            raise ValueError(f"Could not extract price from object: {price_obj}")
+
+        def extract_price_function(self, price_obj: Union[dict, object]) -> float:
+            """
+            Extracts a numerical price from a price object.
+
+            Supports multiple input formats such as dicts or objects with price attributes.
+
+            Args:
+                price_obj (Union[dict, object]): Price object or dictionary.
+
+            Returns:
+                float: Extracted price (preferably including VAT).
+
+            Raises:
+                ValueError: If no valid price can be extracted.
+            """
+
+            # === EARLY EXIT if price_obj is already a price dict ===
+            if isinstance(price_obj, dict) and "costFunction" in price_obj:
+                return price_obj["costFunction"]
+
+            # If object with .costFunction attribute
+            try:
+                cost_function = price_obj.costFunction # type: ignore
+                if isinstance(cost_function, str):
+                    return cost_function # type: ignore
+            except AttributeError:
+                pass
+
+            # If dict with 'costFunction' key nested
+            try:
+                cost_data = price_obj["costFunction"] # type: ignore
+                if isinstance(cost_data, str):
+                    return cost_data # type: ignore
+                elif isinstance(cost_data, dict) and "costFunction" in cost_data:
+                    return cost_data["costFunction"]
+            except (KeyError, TypeError):
+                pass
+
+            raise ValueError("Could not extract costFunction from the input object.")
+    
         class Energy:
             """
-            Subclass of Price for energy data handling and optimization logic.
+            Handles energy price-related logic, such as retrieving component prices
+            and computing operational energy cost over time.
 
-            Handles:
-            - Storing and processing time-series energy data.
-            - Calculating durations and averages.
-            - Finding optimal start times for minimizing energy costs.
+            Methods may fallback to class-wide energy data if no explicit input is given.
             """
             tariff_id = str
             energy_data = [{"datetime":None,"kW":None}]
@@ -738,11 +892,11 @@ class Tariffs:
                     if isinstance(dp, dict) and "datetime" in dp and "kW" in dp:
                         # Ensure datetime is ISO string
                         dt_str = (
-                            dp["datetime"].isoformat()
-                            if isinstance(dp["datetime"], datetime.datetime)
-                            else str(dp["datetime"])
+                            dp["datetime"].isoformat() # type: ignore
+                            if isinstance(dp["datetime"], datetime.datetime) # type: ignore
+                            else str(dp["datetime"]) # type: ignore
                         )
-                        cleaned_data.append({"datetime": dt_str, "kW": dp["kW"]})
+                        cleaned_data.append({"datetime": dt_str, "kW": dp["kW"]}) # type: ignore
                     elif isinstance(dp, (tuple, list)) and len(dp) == 2:
                         dt, kW = dp
                         if isinstance(dt, datetime.datetime):
@@ -762,9 +916,9 @@ class Tariffs:
 
                 # Sort the data by datetime
                 self.energy_data.sort(
-                    key=lambda x: datetime.datetime.fromisoformat(x["datetime"])
+                    key=lambda x: datetime.datetime.fromisoformat(x["datetime"]) # type: ignore
                 )
-                return self.energy_data
+                return self.energy_data # type: ignore
 
             def get_mean(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> float:
                 """
@@ -784,7 +938,7 @@ class Tariffs:
                 if not energy_data or not isinstance(energy_data, list):
                     raise ValueError("Energy data must be a non-empty list of dicts.")
 
-                mean_value = sum(d["kW"] for d in energy_data) / len(energy_data)
+                mean_value = sum(d["kW"] for d in energy_data) / len(energy_data) # type: ignore
                 return mean_value
                         
             def get_duration(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.timedelta:
@@ -805,107 +959,11 @@ class Tariffs:
                 if len(energy_data) < 2:
                     raise ValueError("Not enough energy data points to determine duration.")
                 #Converts to datetime obj
-                datetimes = [datetime.datetime.fromisoformat(p["datetime"]) for p in energy_data]
+                datetimes = [datetime.datetime.fromisoformat(p["datetime"]) for p in energy_data] # type: ignore
                 #Calculate time difrence
                 duration = datetimes[-1] - datetimes[0] #End - Start
                 return duration
             
-            def extract_price_value(self, price_obj: Union[dict, object]) -> float:
-                """
-                Extract a numeric price from various price object formats.
-
-                Args:
-                    price_obj (dict or object): Price container.
-
-                Returns:
-                    float: Price value.
-
-                Raises:
-                    ValueError: If price cannot be extracted.
-                """
-                #print(f"In extract_price: {price_obj}") #debug
-
-                # === EARLY EXIT if price_obj is already a price dict ===
-                if isinstance(price_obj, dict):
-                    if "priceIncVat" in price_obj:
-                        return float(price_obj["priceIncVat"])
-                    elif "priceExVat" in price_obj:
-                        return float(price_obj["priceExVat"])
-                    
-                # If object with .price attribute that is a dict or object
-                try:
-                    price_attr = price_obj.price
-                    print(price_attr)
-                    if isinstance(price_attr, (float, int)):
-                        return float(price_attr)
-                    elif isinstance(price_attr, dict):
-                        if "priceIncVat" in price_attr:
-                            return float(price_attr["price_inc_vat"])
-                        elif "priceExVat" in price_attr:
-                            return float(price_attr["price_ex_vat"])
-                except AttributeError:
-                    pass
-
-                # If dict with 'price' key that is a dict
-                try:
-                    price_data = price_obj["price"]
-                    print(f"in string try: price_data: {price_data}")
-                    if isinstance(price_data, (float, int)):
-                        return float(price_data)
-                    elif isinstance(price_data, dict):
-                        if "price_inc_vat" in price_data:
-                            return float(price_data["price_inc_vat"])
-                        elif "price_ex_vat" in price_data:
-                            return float(price_data["price_ex_vat"])
-                except (KeyError, TypeError):
-                    pass
-
-                # If price_obj itself is a dict with priceIncVat/priceExVat
-                if isinstance(price_obj, dict):
-                    if "price_inc_vat" in price_obj:
-                        return float(price_obj["price_inc_vat"])
-                    elif "price_ex_vat" in price_obj:
-                        return float(price_obj["price_ex_vat"])
-
-                raise ValueError("Could not extract numeric price from energy_price object.")
-
-            def extract_price_function(self, price_obj: Union[dict, object]) -> float:
-                """
-                Extracts a string value of 'costFunction' from an object or dictionary.
-
-                Args:
-                    price_obj (object or dict): Container that may hold a 'costFunction'.
-
-                Returns:
-                    str: The extracted cost function string.
-
-                Raises:
-                    ValueError: If no valid costFunction is found.
-                """
-                # === EARLY EXIT if price_obj is already a price dict ===
-                if isinstance(price_obj, dict) and "costFunction" in price_obj:
-                    return price_obj["costFunction"]
-
-                # If object with .costFunction attribute
-                try:
-                    cost_function = price_obj.costFunction
-                    if isinstance(cost_function, str):
-                        return cost_function
-                except AttributeError:
-                    pass
-
-                # If dict with 'costFunction' key nested
-                try:
-                    cost_data = price_obj["costFunction"]
-                    if isinstance(cost_data, str):
-                        return cost_data
-                    elif isinstance(cost_data, dict) and "costFunction" in cost_data:
-                        return cost_data["costFunction"]
-                except (KeyError, TypeError):
-                    pass
-
-                raise ValueError("Could not extract costFunction from the input object.")
-
             def get_optimal_start(self, energy_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.datetime:
                 """
                 Finds the optimal start time within the next 24h that minimizes
@@ -930,8 +988,8 @@ class Tariffs:
                     raise ValueError("Not enough data points to calculate duration.")
 
                 # Calculate duration from first to last timestamp
-                start_time = datetime.datetime.fromisoformat(energy_data[0]["datetime"])
-                end_time = datetime.datetime.fromisoformat(energy_data[-1]["datetime"])
+                start_time = datetime.datetime.fromisoformat(energy_data[0]["datetime"]) # type: ignore
+                end_time = datetime.datetime.fromisoformat(energy_data[-1]["datetime"]) # type: ignore
                 #print(f"start_time={start_time} and end_time={end_time}")
                 duration = end_time - start_time
                 #print(f"duraiton={duration}")
@@ -961,7 +1019,7 @@ class Tariffs:
 
                         try:
                             energy_components = self.parent.get_energy_price(tariff_id,current_time)
-                            hour_price = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
+                            hour_price = sum(self.parent.extract_price_value(comp["price"]) for comp in energy_components)
                             total_price += hour_price
 
                         except Exception:
@@ -973,7 +1031,7 @@ class Tariffs:
 
                     check_time += datetime.timedelta(hours=1)
                 #print(f"total_price={total_price}")
-                return best_start
+                return best_start # type: ignore
             
             def get_cost(self, now: datetime.datetime, kW: float) -> float:
                 """
@@ -999,7 +1057,7 @@ class Tariffs:
                     energy_components = self.parent.get_energy_price(tariff_id, now)
 
                     # Sum up all price components (e.g., energy, grid fee, taxes, etc.)
-                    price_per_kWh = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
+                    price_per_kWh = sum(self.parent.extract_price_value(comp["price"]) for comp in energy_components)
 
                     # Calculate cost as price per kWh multiplied by the power usage (kW)
                     cost = price_per_kWh * kW
@@ -1010,19 +1068,22 @@ class Tariffs:
                     print(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
-            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], energy_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
+            def get_operation_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], energy_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
                 """
-                Calculate total cost of operation over a time period using average power usage.
+                Compute the cost of energy usage over a specified interval.
 
                 Args:
-                    start_time (datetime.datetime): Start time of the operation.
-                    time_duration (str or timedelta): Duration of the operation
-                    if str input ex: hh:mm:ss.
-                    power_data (dict): Dictionary with 'peak' key containing list of power values.
+                    start_time (datetime.datetime): Starting point of the operation.
+                    time_duration (Union[str, datetime.timedelta]): Operation length as a string ("HH:MM:SS") or timedelta.
+                    energy_data_input (Optional[list]): Optional list of data points. If None, uses class-stored energy data.
 
                 Returns:
-                    float: Total cost over the operation period.
+                    float: Total calculated energy cost.
+
+                Raises:
+                    Exception: If no tariff ID is set or data is missing.
                 """
+
                 if self.tariff_id is None:
                     raise Exception("No tariff_id is set for energy class")
                 # Use default tariff
@@ -1032,8 +1093,9 @@ class Tariffs:
                     energy_data = energy_data_input
                 else:
                     energy_data = self.energy_data
+
                 # Calculate mean power usage from the provided power data (e.g., from "peak" values)
-                energy_mean = self.get_mean(energy_data)
+                energy_mean = self.get_mean(energy_data) # type: ignore
 
                 # If time_duration is a string, convert it to a timedelta
                 if isinstance(time_duration, str):
@@ -1058,10 +1120,12 @@ class Tariffs:
                     try:
                         # Retrieve power price components for the current hour
                         energy_components = self.parent.get_energy_price(tariff_id,current_time)
-                        # Extract and sum price values from all components (e.g., grid cost, tax, etc.)
-                        hour_price = sum(self.extract_price_value(comp["price"]) for comp in energy_components)
+                        for comp in energy_components:
+                            # Extract and sum price values from all components (e.g., grid cost, tax, etc.)
+                            hour_price = self.parent.extract_price_value(comp["price"]) # type: ignore
+
                         # Multiply hourly price by average power usage to get cost for this hour
-                        total_price += hour_price * energy_mean
+                        total_price += hour_price * energy_mean # type: ignore
 
                     except Exception:
                         # If an error occurs (e.g., missing price data), assume operation fails and set cost to infinite
@@ -1073,6 +1137,7 @@ class Tariffs:
                 return total_price
 
             #==========================Continuous Functions============================
+            # Internal loop that runs in background
             def _cost_update_loop(self, kW, interval_seconds):
                 """
                 Update function for cost
@@ -1087,6 +1152,41 @@ class Tariffs:
                         raise ValueError(f"Error during cost update: {e}")
                     time.sleep(interval_seconds)
 
+            def _energy_data_recording_loop(self, kW: float, interval_seconds: int):
+                """
+                Continuously records kW energy data at the given interval by calling set_data.
+
+                Args:
+                    kW (float): Power consumption to record.
+                    interval_seconds (int): Time in seconds between recordings.
+                """
+                while True:
+                    now = datetime.datetime.now()
+                    try:
+                        # Prepare data point
+                        data_point = {"datetime": now, "kW": kW}
+                        self.set_data([data_point])  # Store using your existing method
+                        print(f"[{now}] Energy data recorded: {kW} kW")
+                    except Exception as e:
+                        print(f"Error during energy data recording: {e}")
+                    time.sleep(interval_seconds)
+
+            # Functions to start the background thread
+            def start_background_energy_recording(self, kW: float, interval_seconds: int = 60):
+                """
+                Starts a background thread that records energy data (datetime + kW) every interval.
+
+                Args:
+                    kW (float): Power usage to record.
+                    interval_seconds (int): Time between recordings.
+                """
+                thread = threading.Thread(
+                    target=self._energy_data_recording_loop,
+                    args=(kW, interval_seconds),
+                    daemon=True  # Stops when the main program exits
+                )
+                thread.start()
+
             def start_background_cost_updates(self, kW: float, interval_seconds: int = 60):
                 """
                 Starts a background thread that updates the cost every `interval_seconds` seconds.
@@ -1097,7 +1197,7 @@ class Tariffs:
                     daemon=True  # Stops when the main program ends
                 )
                 thread.start()
-            #After starting threds use the get funtions
+            # After starting threds use the get funtions
             def get_latest_cost(self):
                 """
                 Retrieves the most recent cost from the queue, if available.
@@ -1106,14 +1206,21 @@ class Tariffs:
                     return self.cost_queue.get()
                 return None
 
+            def get_latest_energy_data(self):
+                """
+                Returns the most recent energy data point, if available.
+                """
+                if self.energy_data:
+                    return self.energy_data[-1]
+                return None
+
+
         class Power:
             """
-            Subclass of Price for power data handling and optimization logic.
+            Handles power pricing, especially peak-based power tariff calculations.
 
-            Handles:
-            - Storing and processing time-series power data.
-            - Calculating durations and averages.
-            - Finding optimal start times for minimizing power costs.
+            Supports ISO8601 durations and structured tariff component evaluation.
+            Defaults to class power data if no explicit list is provided.
             """
             tariff_id = None
             power_data = [{"datetime":None,"peak":None}]
@@ -1166,11 +1273,11 @@ class Tariffs:
                     if isinstance(dp, dict) and "datetime" in dp and "kW" in dp:
                         # Ensure datetime is ISO string
                         dt_str = (
-                            dp["datetime"].isoformat()
-                            if isinstance(dp["datetime"], datetime.datetime)
-                            else str(dp["datetime"])
+                            dp["datetime"].isoformat() # type: ignore
+                            if isinstance(dp["datetime"], datetime.datetime) # type: ignore
+                            else str(dp["datetime"]) # type: ignore
                         )
-                        cleaned_data.append({"datetime": dt_str, "kW": dp["kW"]})
+                        cleaned_data.append({"datetime": dt_str, "kW": dp["kW"]}) # type: ignore
                     elif isinstance(dp, (tuple, list)) and len(dp) == 2:
                         dt, kW = dp
                         if isinstance(dt, datetime.datetime):
@@ -1190,9 +1297,9 @@ class Tariffs:
 
                 # Sort the data by datetime
                 self.power_data.sort(
-                    key=lambda x: datetime.datetime.fromisoformat(x["datetime"])
+                    key=lambda x: datetime.datetime.fromisoformat(x["datetime"]) # type: ignore
                 )
-                return self.power_data
+                return self.power_data # type: ignore
 
             def get_mean(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> float:
                 """
@@ -1212,7 +1319,7 @@ class Tariffs:
                 if not power_data or not isinstance(power_data, list):
                     raise ValueError("Energy data must be a non-empty list of dicts.")
 
-                mean_value = sum(d["kW"] for d in power_data) / len(power_data)
+                mean_value = sum(d["kW"] for d in power_data) / len(power_data) # type: ignore
                 return mean_value
             
             def get_duration(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.timedelta:
@@ -1234,107 +1341,11 @@ class Tariffs:
                 if len(power_data) < 2:
                     raise ValueError("Not enough power data points to determine duration.")
                 #Converts to datetime obj
-                datetimes = [datetime.datetime.fromisoformat(p["datetime"]) for p in power_data]
+                datetimes = [datetime.datetime.fromisoformat(p["datetime"]) for p in power_data]# type: ignore
                 #Calculate time difrence
                 duration = datetimes[-1] - datetimes[0] #End - Start
                 return duration
             
-            def extract_price_value(self, price_obj: Union[dict, object]) -> float:
-                """
-                Extract a numeric price from various price object formats.
-
-                Args:
-                    price_obj (dict or object): Price container.
-
-                Returns:
-                    float: Price value.
-
-                Raises:
-                    ValueError: If price cannot be extracted.
-                """
-                #print(f"In extract_price: {price_obj}") #debug
-
-                # === EARLY EXIT if price_obj is already a price dict ===
-                if isinstance(price_obj, dict):
-                    if "priceIncVat" in price_obj:
-                        return float(price_obj["priceIncVat"])
-                    elif "priceExVat" in price_obj:
-                        return float(price_obj["priceExVat"])
-                    
-                # If object with .price attribute that is a dict or object
-                try:
-                    price_attr = price_obj.price
-                    print(price_attr)
-                    if isinstance(price_attr, (float, int)):
-                        return float(price_attr)
-                    elif isinstance(price_attr, dict):
-                        if "priceIncVat" in price_attr:
-                            return float(price_attr["price_inc_vat"])
-                        elif "priceExVat" in price_attr:
-                            return float(price_attr["price_ex_vat"])
-                except AttributeError:
-                    pass
-
-                # If dict with 'price' key that is a dict
-                try:
-                    price_data = price_obj["price"]
-                    print(f"in string try: price_data: {price_data}")
-                    if isinstance(price_data, (float, int)):
-                        return float(price_data)
-                    elif isinstance(price_data, dict):
-                        if "price_inc_vat" in price_data:
-                            return float(price_data["price_inc_vat"])
-                        elif "price_ex_vat" in price_data:
-                            return float(price_data["price_ex_vat"])
-                except (KeyError, TypeError):
-                    pass
-
-                # If price_obj itself is a dict with priceIncVat/priceExVat
-                if isinstance(price_obj, dict):
-                    if "price_inc_vat" in price_obj:
-                        return float(price_obj["price_inc_vat"])
-                    elif "price_ex_vat" in price_obj:
-                        return float(price_obj["price_ex_vat"])
-
-                raise ValueError("Could not extract numeric price from power_price object.")
-
-            def extract_price_function(self, price_obj: Union[dict, object]) -> float:
-                """
-                Extracts a string value of 'costFunction' from an object or dictionary.
-
-                Args:
-                    price_obj (object or dict): Container that may hold a 'costFunction'.
-
-                Returns:
-                    str: The extracted cost function string.
-
-                Raises:
-                    ValueError: If no valid costFunction is found.
-                """
-                # === EARLY EXIT if price_obj is already a price dict ===
-                if isinstance(price_obj, dict) and "costFunction" in price_obj:
-                    return price_obj["costFunction"]
-
-                # If object with .costFunction attribute
-                try:
-                    cost_function = price_obj.costFunction
-                    if isinstance(cost_function, str):
-                        return cost_function
-                except AttributeError:
-                    pass
-
-                # If dict with 'costFunction' key nested
-                try:
-                    cost_data = price_obj["costFunction"]
-                    if isinstance(cost_data, str):
-                        return cost_data
-                    elif isinstance(cost_data, dict) and "costFunction" in cost_data:
-                        return cost_data["costFunction"]
-                except (KeyError, TypeError):
-                    pass
-
-                raise ValueError("Could not extract costFunction from the input object.")
-
             def get_optimal_start(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.datetime:
                 """
                 Finds the optimal start time within the next 24h that minimizes
@@ -1359,8 +1370,8 @@ class Tariffs:
                     raise ValueError("Not enough data points to calculate duration.")
 
                 # Calculate duration from first to last timestamp
-                start_time = datetime.datetime.fromisoformat(power_data[0]["datetime"])
-                end_time = datetime.datetime.fromisoformat(power_data[-1]["datetime"])
+                start_time = datetime.datetime.fromisoformat(power_data[0]["datetime"]) # type: ignore
+                end_time = datetime.datetime.fromisoformat(power_data[-1]["datetime"]) # type: ignore
                 #print(f"start_time={start_time} and end_time={end_time}")
                 duration = end_time - start_time
                 #print(f"duraiton={duration}")
@@ -1390,7 +1401,7 @@ class Tariffs:
 
                         try:
                             power_components = self.parent.get_power_price(tariff_id,current_time)
-                            hour_price = sum(self.extract_price_value(comp["price"]) for comp in power_components)
+                            hour_price = sum(self.parent.extract_price_value(comp["price"]) for comp in power_components)
                             total_price += hour_price
 
                         except Exception:
@@ -1402,7 +1413,7 @@ class Tariffs:
 
                     check_time += datetime.timedelta(hours=1)
                 #print(f"total_price={total_price}")
-                return best_start
+                return best_start # type: ignore
             
             def get_cost(self, now: datetime.datetime, kW: float) -> float:
                 """
@@ -1428,7 +1439,7 @@ class Tariffs:
                     power_components = self.parent.get_power_price(tariff_id, now)
 
                     # Sum up all price components (e.g., power, grid fee, taxes, etc.)
-                    price_per_kWh = sum(self.extract_price_value(comp["price"]) for comp in power_components)
+                    price_per_kWh = sum(self.parent.extract_price_value(comp["price"]) for comp in power_components)
 
                     # Calculate cost as price per kWh multiplied by the power usage (kW)
                     cost = price_per_kWh * kW
@@ -1439,66 +1450,126 @@ class Tariffs:
                     print(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
-            def get_operation_mean_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], power_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
+            def get_operation_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], power_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
                 """
-                Calculate total cost of operation over a time period using average power usage.
+                Calculate power cost using tariff peak rules.
 
                 Args:
-                    start_time (datetime.datetime): Start time of the operation.
-                    time_duration (str or timedelta): Duration of the operation.
-                    power_data (dict): Dictionary with 'kW' key containing list of power values.
+                    start_time (datetime.datetime): Start time for operation cost window.
+                    time_duration (str | timedelta): Duration string ("HH:MM:SS") or a timedelta object.
+                    power_data_input (Optional[list]): Optional power data. Falls back on class-stored data if None.
 
                 Returns:
-                    float: Total cost over the operation period.
-                """
-                # Use default tariff
-                tariff_id = self.tariff_id
-                # If no data given use the set class data list
-                if power_data_input is not None:
-                    power_data = power_data_input
-                else:
-                    power_data = self.power_data
-                # Calculate mean power usage from the provided power data (e.g., from "peak" values)
-                power_mean = self.get_mean(power_data)
+                    float: Total calculated cost.
 
-                # If time_duration is a string, convert it to a timedelta
+                Raises:
+                    ValueError: On missing or invalid data.
+                """
+                if self.tariff_id is None:
+                    raise Exception("No tariff_id is set for power class")
+
+                # Parse duration
                 if isinstance(time_duration, str):
-                    hours, minutes, seconds = map(int, time_duration.split(":"))
-                    duration = datetime.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+                    h, m, s = map(int, time_duration.split(":"))
+                    duration = datetime.timedelta(hours=h, minutes=m, seconds=s)
                 elif isinstance(time_duration, datetime.timedelta):
-                    # If already a timedelta, use as-is
                     duration = time_duration
                 else:
-                    # Raise an error if time_duration is not of expected types
-                    raise ValueError("time_duration must be a string in 'HH:MM:SS' format or a timedelta")
-                
-                # Set initial time pointer and calculate the end time
-                current_time = start_time
-                end_time = start_time + duration
+                    raise ValueError("time_duration must be string or timedelta")
 
-                # Start with total cost as 0
-                total_price = 0.0
+                tariff_id = self.tariff_id
+                power_data = power_data_input if power_data_input else self.power_data
 
-                # Loop through each hour in the interval
-                while current_time <= end_time:
-                    try:
-                        # Retrieve power price components for the current hour
-                        power_components = self.parent.get_power_price(tariff_id,current_time)
-                        # Extract and sum price values from all components (e.g., grid cost, tax, etc.)
-                        hour_price = sum(self.extract_price_value(comp["price"]) for comp in power_components)
-                        # Multiply hourly price by average power usage to get cost for this hour
-                        total_price += hour_price * power_mean
+                if not power_data:
+                    raise ValueError("No power data available")
 
-                    except Exception:
-                        # If an error occurs (e.g., missing price data), assume operation fails and set cost to infinite
-                        total_price = float("inf")
-                        break
-                    # Advance time by one hour
-                    current_time += datetime.timedelta(hours=1)
-                # Return total cost for the time interval
-                return total_price
+                # Assumption: One value per HOUR
+                sampling_interval = datetime.timedelta(hours=1)
+
+                # Determine how many data points are needed to cover duration
+                n_points_needed = int(duration.total_seconds() // sampling_interval.total_seconds())
+
+                # Slice or repeat power data to cover required duration
+                values = [float(d["kW"]) for d in power_data] # type: ignore
+                if len(values) < n_points_needed:
+                    repeats = (n_points_needed // len(values)) + 1
+                    values = (values * repeats)[:n_points_needed]
+                else:
+                    values = values[:n_points_needed]
+
+                # Generate artificial timestamps
+                simulated_data = []
+                for i, kW in enumerate(values):
+                    fake_time = start_time + i * sampling_interval
+                    simulated_data.append({"datetime": fake_time.isoformat(), "kW": kW})
+
+                total_cost = 0.0
+                power_components = self.parent.get_power_price(tariff_id, start_time)
+
+                for comp in power_components:
+                    price_val = self.parent.extract_price_value(comp["price"])
+                    peak_settings = comp.get("peakIdentificationSettings", {})
+                    print(f"peak_settings type: {type(peak_settings)}")
+
+                    if not peak_settings:
+                        mean_kw = self.get_mean(simulated_data)  # type: ignore
+                        total_cost += mean_kw * price_val
+                        continue
+
+                    # Peak settings with defults
+                    peak_func = getattr(peak_settings, "peak_function", "peak(base)")
+                    peak_duration = isodate.parse_duration(getattr(peak_settings, "peak_duration", "PT1H"))
+                    peak_period = isodate.parse_duration(getattr(peak_settings, "peak_identification_period", "P1D"))
+                    n_peaks = int(getattr(peak_settings, "number_of_peaks_for_average_calculation", 1)) # type: ignore
+
+                    # Group into daily periods (or simulated periods)
+                    period_buckets: dict[int, list[dict]] = {}
+                    for entry in simulated_data:
+                        dt = datetime.datetime.fromisoformat(entry["datetime"])
+                        offset = (dt - start_time).total_seconds()
+                        period_index = int(offset // peak_period.total_seconds())
+                        period_buckets.setdefault(period_index, []).append(entry)
+
+                    for period_data in period_buckets.values():
+                        windows: dict[int, list[float]] = {}
+                        for entry in period_data:
+                            dt = datetime.datetime.fromisoformat(entry["datetime"])
+                            window_index = int((dt - start_time).total_seconds() // peak_duration.total_seconds())
+                            windows.setdefault(window_index, []).append(entry["kW"])  # type: ignore
+
+                        max_peaks = [max(group) for group in windows.values() if group]
+                        top_peaks = sorted(max_peaks, reverse=True)[:n_peaks]
+                        peak_avg = sum(top_peaks) / len(top_peaks) if top_peaks else 0
+
+                        result_kw = self.evaluate_peak_function(peak_func, peak_avg, 0)
+                        total_cost += result_kw * price_val
+
+                return total_cost       
+            #==========================Helper Functions================================
+            @staticmethod
+            def parse_iso_duration(duration_str: str) -> datetime.timedelta:
+                """
+                Convert ISO 8601 duration strings like 'PT1H' or 'P1D' to timedelta.
+                """
+                try:
+                    return isodate.parse_duration(duration_str)
+                except Exception as e:
+                    raise ValueError(f"Invalid ISO duration '{duration_str}': {e}")
+            @staticmethod
+            def evaluate_peak_function(function_str: str, peak_base: float, peak_reactive: float) -> float:
+                """
+                Replaces peak function string with actual numeric values and safely evaluates it.
+                Allowed format: "peak(base)", "max(0, peak(reactive)-peak(base)/2)", etc.
+                """
+                expr = function_str.replace("peak(base)", str(peak_base)).replace("peak(reactive)", str(peak_reactive))
+                allowed = {"max": max, "min": min, "abs": abs, "round": round, "math": math}
+                try:
+                    return eval(expr, {"__builtins__": None}, allowed)
+                except Exception as e:
+                    raise ValueError(f"Could not evaluate peakFunction: {e}")
 
             #==========================Continuous Functions============================
+            # Internal loop that runs in background
             def _cost_update_loop(self, kW, interval_seconds):
                 """
                 Update function for cost
@@ -1513,6 +1584,26 @@ class Tariffs:
                         raise ValueError(f"Error during cost update: {e}")
                     time.sleep(interval_seconds)
 
+            def _power_data_recording_loop(self, kW: float, interval_seconds: int):
+                """
+                Continuously records kW power data at the given interval by calling set_power_data.
+
+                Args:
+                    kW (float): Power consumption to record.
+                    interval_seconds (int): Time in seconds between recordings.
+                """
+                while True:
+                    now = datetime.datetime.now()
+                    try:
+                        # Prepare a data point
+                        data_point = {"datetime": now, "kW": kW}
+                        self.set_data([data_point])  # Store using your custom method
+                        print(f"[{now}] Power data recorded: {kW} kW")
+                    except Exception as e:
+                        print(f"Error during power data recording: {e}")
+                    time.sleep(interval_seconds)
+            
+            # Functions to start the background thread
             def start_background_cost_updates(self, kW: float, interval_seconds: int = 60):
                 """
                 Starts a background thread that updates the cost every `interval_seconds` seconds.
@@ -1523,7 +1614,23 @@ class Tariffs:
                     daemon=True  # Stops when the main program ends
                 )
                 thread.start()
-            #After starting threds use the get funtions
+            
+            def start_background_power_recording(self, kW: float, interval_seconds: int = 60):
+                """
+                Starts a background thread that records power data (datetime + kW) every interval.
+
+                Args:
+                    kW (float): Power value to record.
+                    interval_seconds (int): Time between recordings.
+                """
+                thread = threading.Thread(
+                    target=self._power_data_recording_loop,
+                    args=(kW, interval_seconds),
+                    daemon=True  # Daemon threads stop when main program exits
+                )
+                thread.start()
+
+            # After starting threds use the get funtions
             def get_latest_cost(self):
                 """
                 Retrieves the most recent cost from the queue, if available.
