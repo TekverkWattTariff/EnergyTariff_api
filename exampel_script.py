@@ -124,7 +124,7 @@ now = datetime.datetime.now().replace(year=2026,hour=5, minute=30, second=0, mic
 power_data = Tariff2.power.set_data(power_raw_data)
 Tariff2.price.power.set_id(id2)
 operatianal_cost = Tariff2.price.power.get_operation_cost(now,"4:30:00",power_data)
-print(f"Cost of using energy for {time_str} is {operatianal_cost}")
+print(f"Cost of using power for {time_str} is {operatianal_cost}")
 
 # === Exemple på continus functions ===
 Tariff2.set_id(id2)
@@ -140,7 +140,7 @@ print("Kör bakgrundsuppdatering... (CTRL+C för att avsluta)\n")
 
 try:
     while True:
-        latest_cost = Tariff2.price.power.get_latest_cost()
+        latest_cost = Tariff2.price.energy.get_latest_cost()
         if latest_cost is not None:
             print(f"[{datetime.datetime.now()}] Aktuell beräknad kostnad: {latest_cost:.2f} kr")
         else:

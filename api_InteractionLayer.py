@@ -154,7 +154,7 @@ class Tariffs:
         """
         # Check if file exists
         if not os.path.isfile(path):
-            print(f"ERROR - File not found at: {path}")
+            raise ValueError(f"ERROR - File not found at: {path}")
             return []
 
         try:
@@ -162,16 +162,16 @@ class Tariffs:
             with open(path, 'r', encoding='utf-8') as file:
                 data = json.load(file)
         except json.JSONDecodeError as e:
-            print(f"ERROR - Failed to decode JSON: {e}")
+            raise ValueError(f"ERROR - Failed to decode JSON: {e}")
             return []
         except Exception as e:
-            print(f"ERROR - Unexpected error while reading file: {e}")
+            raise ValueError(f"ERROR - Unexpected error while reading file: {e}")
             return []
 
         # Check if 'tariffs' key exists and is a list
         tariffs = data.get('tariffs', [])
         if not isinstance(tariffs, list):
-            print("ERROR - 'tariffs' key missing or not a list in JSON data.")
+            raise ValueError("ERROR - 'tariffs' key missing or not a list in JSON data.")
             return []
 
         return tariffs
@@ -286,10 +286,6 @@ class Tariffs:
             for t in tariffs
         ]
 
-        # Debug: visa vilka ID:n som finns
-        #print("Available tariff IDs:", available_ids)
-        #print("Checking for tariff_id:", tariff_id)
-
         return tariff_id in available_ids
 
     def get_id_byName(self, tariff_name: str, company: str) -> str:
@@ -333,9 +329,9 @@ class Tariffs:
             try:
                 tariffs = self.get_tariffs()
                 self.tariffs_queue.put(tariffs)
-                print(f"[{datetime.datetime.now()}] Tariffs updated.")
+                #print(f"[{datetime.datetime.now()}] Tariffs updated.") # Debugg
             except Exception as e:
-                print(f"Error during tariffs update: {e}")
+                raise ValueError(f"Error during tariffs update: {e}") # Debugg
             time.sleep(interval_seconds)
 
     def _update_single_tariff_loop(self, tariff_id: str, time_interval: datetime.timedelta):
@@ -356,7 +352,7 @@ class Tariffs:
                     tariff = self.get_tariff(tariff_id)
                     self.single_tariff_queue.put(tariff)
                     self.last_updated = now
-                    #print(f"[{now}] Tariff '{tariff_id}' updated.")
+                    #print(f"[{now}] Tariff '{tariff_id}' updated.") # Debugg
                 except Exception as e:
                     raise ValueError(f"Error during single tariff update: {e}")
             time.sleep(time_interval.total_seconds())
@@ -454,7 +450,7 @@ class Tariffs:
             return Tariff(**tariff_data)
 
         except Exception as e:
-            print(f"[ERROR] Failed to convert dict to Tariff: {e}")
+            raise ValueError(f"[ERROR] Failed to convert dict to Tariff: {e}")
             return None # type: ignore
 
     class Price:
@@ -617,7 +613,7 @@ class Tariffs:
                 tariff = self.parent.get_tariff(tariff_id)
                 components = getattr(tariff.energy_price, "components", [])
             except Exception as e:
-                print(f"[ERROR] Failed in get_energy_price: {e}")
+                raise ValueError(f"[ERROR] Failed in get_energy_price: {e}")
                 raise e
             
             matching_components = []
@@ -1033,7 +1029,7 @@ class Tariffs:
                 #print(f"total_price={total_price}")
                 return best_start # type: ignore
             
-            def get_cost(self, now: datetime.datetime, kW: float) -> float:
+            def get_cost(self, now: datetime.datetime, kW: float) -> float: # type: ignore
                 """
                 Calculates the cost of operating at a specific time with given energy usage.
 
@@ -1055,17 +1051,16 @@ class Tariffs:
 
                     # Fetch energy price components at the given time
                     energy_components = self.parent.get_energy_price(tariff_id, now)
-
-                    # Sum up all price components (e.g., energy, grid fee, taxes, etc.)
-                    price_per_kWh = sum(self.parent.extract_price_value(comp["price"]) for comp in energy_components)
-
-                    # Calculate cost as price per kWh multiplied by the power usage (kW)
-                    cost = price_per_kWh * kW
-                    return cost
+                    for comp in energy_components:
+                        # Sum up all price components (e.g., energy, grid fee, taxes, etc.)
+                        price_per_kWh = self.parent.extract_price_value(comp["price"])
+                        # Calculate cost as price per kWh multiplied by the power usage (kW)
+                        cost = price_per_kWh * kW
+                        return float(cost)
 
                 except Exception as e:
                     # If price lookup fails, return infinite cost (or optionally log the error)
-                    print(f"Error calculating price at {now}: {e}")
+                    raise ValueError(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
             def get_operation_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], energy_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
@@ -1166,9 +1161,9 @@ class Tariffs:
                         # Prepare data point
                         data_point = {"datetime": now, "kW": kW}
                         self.set_data([data_point])  # Store using your existing method
-                        print(f"[{now}] Energy data recorded: {kW} kW")
+                        #print(f"[{now}] Energy data recorded: {kW} kW") # Debugg
                     except Exception as e:
-                        print(f"Error during energy data recording: {e}")
+                        #print(f"Error during energy data recording: {e}") # Debugg
                     time.sleep(interval_seconds)
 
             # Functions to start the background thread
@@ -1349,7 +1344,7 @@ class Tariffs:
             def get_optimal_start(self, power_data_input: Optional[list[dict[str, Union[str, float]]]] = None) -> datetime.datetime:
                 """
                 Finds the optimal start time within the next 24h that minimizes
-                total power cost based on provided or stored power data.
+                total power cost including peak cost impact
 
                 Args:
                     power_data (list[dict], optional): List of power data points.
@@ -1376,43 +1371,43 @@ class Tariffs:
                 duration = end_time - start_time
                 #print(f"duraiton={duration}")
                 hours = int(duration.total_seconds() // 3600)
-                #print(f"hours={hours}")
 
                 if hours <= 0:
                     raise ValueError("Duration must be at least one hour.")
 
-                # Use default tariff
-                tariff_id = self.tariff_id
-
                 # Loop through potential start times over the next 24 hours
                 now = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
                 latest_start = now + datetime.timedelta(hours=(24 - hours))  # latest valid start
-                #print(f"latest_start={type(latest_start)}")
 
                 best_start = None
-                lowest_total_price = float("inf")
+                lowest_cost = float("inf")
 
                 check_time = now
-                #print(f"{check_time} <= {latest_start}: {check_time <= latest_start}")
                 while check_time <= latest_start:
-                    total_price = 0
+                    # Simulated power_data to given start time
+                    simulated_data = []
                     for i in range(hours):
-                        current_time = check_time + datetime.timedelta(hours=i)
+                        entry = power_data[i % len(power_data)]  # wrap if not enough
+                        new_time = check_time + datetime.timedelta(hours=i)
+                        simulated_data.append({
+                            "datetime": new_time.isoformat(),
+                            "kW": float(entry["kW"]) # type: ignore
+                        })
 
-                        try:
-                            power_components = self.parent.get_power_price(tariff_id,current_time)
-                            hour_price = sum(self.parent.extract_price_value(comp["price"]) for comp in power_components)
-                            total_price += hour_price
+                    # Calculate operation cost with peak-rules
+                    cost = self.get_operation_cost(
+                        start_time=check_time,
+                        time_duration=duration,
+                        power_data_input=simulated_data
+                    )
 
-                        except Exception:
-                            total_price = float("inf")
-                            break
-                    if total_price < lowest_total_price:
-                        lowest_total_price = total_price
+                    # Saves the best price point
+                    if cost < lowest_cost:
+                        lowest_cost = cost
                         best_start = check_time
 
                     check_time += datetime.timedelta(hours=1)
-                #print(f"total_price={total_price}")
+
                 return best_start # type: ignore
             
             def get_cost(self, now: datetime.datetime, kW: float) -> float:
@@ -1447,7 +1442,7 @@ class Tariffs:
 
                 except Exception as e:
                     # If price lookup fails, return infinite cost (or optionally log the error)
-                    print(f"Error calculating price at {now}: {e}")
+                    raise ValueError(f"Error calculating price at {now}: {e}")
                     return float("inf")
 
             def get_operation_cost(self, start_time: datetime.datetime, time_duration: Union[str, datetime.timedelta], power_data_input: Optional[list[dict[str, Union[str, float]]]]) -> float:
@@ -1509,7 +1504,7 @@ class Tariffs:
                 for comp in power_components:
                     price_val = self.parent.extract_price_value(comp["price"])
                     peak_settings = comp.get("peakIdentificationSettings", {})
-                    print(f"peak_settings type: {type(peak_settings)}")
+                    #print(f"peak_settings type: {type(peak_settings)}") # Debugg
 
                     if not peak_settings:
                         mean_kw = self.get_mean(simulated_data)  # type: ignore
@@ -1598,9 +1593,9 @@ class Tariffs:
                         # Prepare a data point
                         data_point = {"datetime": now, "kW": kW}
                         self.set_data([data_point])  # Store using your custom method
-                        print(f"[{now}] Power data recorded: {kW} kW")
+                        #print(f"[{now}] Power data recorded: {kW} kW") # Debugg
                     except Exception as e:
-                        print(f"Error during power data recording: {e}")
+                        raise ValueError(f"Error during power data recording: {e}")
                     time.sleep(interval_seconds)
             
             # Functions to start the background thread
