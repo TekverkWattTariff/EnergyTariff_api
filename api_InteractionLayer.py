@@ -133,7 +133,7 @@ class Tariffs:
         if self._json_path is None:
             response = self.api_instance.get_tariffs(self.v) # type: ignore
             return response.tariffs # type: ignore
-        else:
+        else: #JSON file read
             raw_tariffs = self.get_tariffs_byJson(self._json_path)
             tariffs = []
             for t in raw_tariffs:
@@ -1162,7 +1162,7 @@ class Tariffs:
                         data_point = {"datetime": now, "kW": kW}
                         self.set_data([data_point])  # Store using your existing method
                         #print(f"[{now}] Energy data recorded: {kW} kW") # Debugg
-                    except Exception as e:
+                    except Exception:
                         #print(f"Error during energy data recording: {e}") # Debugg
                         time.sleep(interval_seconds)
 
