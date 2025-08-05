@@ -633,10 +633,11 @@
                     },
                     "type": {
                         "type": "string",
-                        "pattern": "fixed|spot",
+                        "pattern": "fixed|spot|kwh",
                         "examples": [
                             "fixed",
-                            "spot"
+                            "spot",
+                            "kwh"
                         ],
                         "default": "fixed"
                     },

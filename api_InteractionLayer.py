@@ -2,6 +2,7 @@
 import math
 import sys
 import os
+import re
 import time
 import datetime
 import isodate
@@ -133,7 +134,7 @@ class Tariffs:
         if self._json_path is None:
             response = self.api_instance.get_tariffs(self.v) # type: ignore
             return response.tariffs # type: ignore
-        else: #JSON file read
+        else: #JSON file
             raw_tariffs = self.get_tariffs_byJson(self._json_path)
             tariffs = []
             for t in raw_tariffs:
@@ -1501,9 +1502,12 @@ class Tariffs:
                 total_cost = 0.0
                 power_components = self.parent.get_power_price(tariff_id, start_time)
 
+                peak_values = {}
+
                 for comp in power_components:
                     price_val = self.parent.extract_price_value(comp["price"])
                     peak_settings = comp.get("peakIdentificationSettings", {})
+                    component_ref = comp.get("reference", "main")
                     #print(f"peak_settings type: {type(peak_settings)}") # Debugg
 
                     if not peak_settings:
@@ -1536,7 +1540,15 @@ class Tariffs:
                         top_peaks = sorted(max_peaks, reverse=True)[:n_peaks]
                         peak_avg = sum(top_peaks) / len(top_peaks) if top_peaks else 0
 
-                        result_kw = self.evaluate_peak_function(peak_func, peak_avg, 0)
+                        peak_values[component_ref] = peak_avg
+                        #Fall back so tekverk api dont brake code
+                        if "base" not in peak_values:
+                            peak_values["base"] = peak_values.get("main", 0.0)
+
+                        if "reactive" not in peak_values:
+                            peak_values["reactive"] = 0.0
+
+                        result_kw = self.evaluate_peak_function(peak_func, peak_values)
                         total_cost += result_kw * price_val
 
                 return total_cost       
@@ -1550,19 +1562,48 @@ class Tariffs:
                     return isodate.parse_duration(duration_str)
                 except Exception as e:
                     raise ValueError(f"Invalid ISO duration '{duration_str}': {e}")
+            from typing import Dict
             @staticmethod
-            def evaluate_peak_function(function_str: str, peak_base: float, peak_reactive: float) -> float:
+            def evaluate_peak_function(function_str: str, peak_values: Dict[str, float]) -> float:
                 """
-                Replaces peak function string with actual numeric values and safely evaluates it.
-                Allowed format: "peak(base)", "max(0, peak(reactive)-peak(base)/2)", etc.
+                Evaluates a peak function expression like "peak(main)", "max(0, peak(base) - peak(high)/2)", etc.
+                Supports legacy references like "peak(base)" and "peak(reactive)".
+                
+                Args:
+                    function_str (str): The peak function string.
+                    peak_values (dict): Mapping from reference name to peak value.
+                        Must include keys like "main", "base", "high", etc. if referenced in function_str.
+
+                Returns:
+                    float: The result of evaluating the function.
+
+                Raises:
+                    ValueError: If a required reference is missing or evaluation fails.
                 """
-                expr = function_str.replace("peak(base)", str(peak_base)).replace("peak(reactive)", str(peak_reactive))
-                allowed = {"max": max, "min": min, "abs": abs, "round": round, "math": math}
+
+                # Handle both new and legacy keys
+                def peak_replacer(match):
+                    ref = match.group(1)
+                    if ref not in peak_values:
+                        raise ValueError(f"Missing peak value for reference: '{ref}'")
+                    return str(peak_values[ref])
+
+                # Replace all peak(...) references
+                expr = re.sub(r"peak\((\w+)\)", peak_replacer, function_str)
+
+                # Safe builtins
+                allowed = {
+                    "max": max,
+                    "min": min,
+                    "abs": abs,
+                    "round": round,
+                    "math": math
+                }
+
                 try:
                     return eval(expr, {"__builtins__": None}, allowed)
                 except Exception as e:
-                    raise ValueError(f"Could not evaluate peakFunction: {e}")
-
+                    raise ValueError(f"Could not evaluate peakFunction '{function_str}': {e}")
             #==========================Continuous Functions============================
             # Internal loop that runs in background
             def _cost_update_loop(self, kW, interval_seconds):

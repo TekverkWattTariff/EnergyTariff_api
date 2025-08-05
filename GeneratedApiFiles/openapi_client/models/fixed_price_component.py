@@ -22,25 +22,22 @@ from typing import Any, ClassVar, Dict, List, Optional
 from typing_extensions import Annotated
 from openapi_client.models.date_interval import DateInterval
 from openapi_client.models.price import Price
-from openapi_client.models.recurring_period import RecurringPeriod
-from openapi_client.models.spot_price_settings import SpotPriceSettings
 from typing import Optional, Set
 from typing_extensions import Self
 
-class EnergyPriceComponent(BaseModel):
+class FixedPriceComponent(BaseModel):
     """
     A time period in which price details are defined. Price components can be overlapping in time to define the full price for one time period.
     """ # noqa: E501
     id: Optional[StrictStr] = Field(default=None, description="Globally unique identifier")
     name: Optional[StrictStr] = Field(default=None, description="A short human readable name.")
     description: Optional[StrictStr] = Field(default=None, description="A longer explanatory text.")
-    type: Optional[Annotated[str, Field(strict=True)]] = 'fixed'
+    type: Optional[Annotated[str, Field(strict=True)]] = Field(default='fixed', description="Type describes if the price component is a publicly available price or customer specific.")
     reference: Optional[StrictStr] = Field(default='main', description="Reference to be used to identify this recurring price period in the cost function.")
-    price: Optional[Price] = None
-    spot_price_settings: Optional[SpotPriceSettings] = Field(default=None, alias="spotPriceSettings")
     valid_period: Optional[DateInterval] = Field(default=None, alias="validPeriod")
-    recurring_periods: Optional[List[RecurringPeriod]] = Field(default=None, alias="recurringPeriods")
-    __properties: ClassVar[List[str]] = ["id", "name", "description", "type", "reference", "price", "spotPriceSettings", "validPeriod", "recurringPeriods"]
+    price: Optional[Price] = None
+    priced_period: Optional[StrictStr] = Field(default=None, description="A time duration in the format [ISO 8601 duration format](https://en.wikipedia.org/wiki/ISO_8601#Durations). Examples: - \"P1D\" for one day - \"P1M\" for one month - \"P2W\" for two weeks - \"P3Y6M4DT12H30M5S\" for a complex duration.", alias="pricedPeriod")
+    __properties: ClassVar[List[str]] = ["id", "name", "description", "type", "reference", "validPeriod", "price", "pricedPeriod"]
 
     @field_validator('type')
     def type_validate_regular_expression(cls, value):
@@ -48,8 +45,8 @@ class EnergyPriceComponent(BaseModel):
         if value is None:
             return value
 
-        if not re.match(r"fixed|spot|kwh", value):
-            raise ValueError(r"must validate the regular expression /fixed|spot/")
+        if not re.match(r"public|specific|fixed", value):
+            raise ValueError(r"must validate the regular expression /public|specific|fixed/")
         return value
 
     model_config = ConfigDict(
@@ -70,7 +67,7 @@ class EnergyPriceComponent(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of EnergyPriceComponent from a JSON string"""
+        """Create an instance of FixedPriceComponent from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -91,27 +88,17 @@ class EnergyPriceComponent(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of price
-        if self.price:
-            _dict['price'] = self.price.to_dict()
-        # override the default output from pydantic by calling `to_dict()` of spot_price_settings
-        if self.spot_price_settings:
-            _dict['spotPriceSettings'] = self.spot_price_settings.to_dict()
         # override the default output from pydantic by calling `to_dict()` of valid_period
         if self.valid_period:
             _dict['validPeriod'] = self.valid_period.to_dict()
-        # override the default output from pydantic by calling `to_dict()` of each item in recurring_periods (list)
-        _items = []
-        if self.recurring_periods:
-            for _item_recurring_periods in self.recurring_periods:
-                if _item_recurring_periods:
-                    _items.append(_item_recurring_periods.to_dict())
-            _dict['recurringPeriods'] = _items
+        # override the default output from pydantic by calling `to_dict()` of price
+        if self.price:
+            _dict['price'] = self.price.to_dict()
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of EnergyPriceComponent from a dict"""
+        """Create an instance of FixedPriceComponent from a dict"""
         if obj is None:
             return None
 
@@ -124,10 +111,9 @@ class EnergyPriceComponent(BaseModel):
             "description": obj.get("description"),
             "type": obj.get("type") if obj.get("type") is not None else 'fixed',
             "reference": obj.get("reference") if obj.get("reference") is not None else 'main',
-            "price": Price.from_dict(obj["price"]) if obj.get("price") is not None else None,
-            "spotPriceSettings": SpotPriceSettings.from_dict(obj["spotPriceSettings"]) if obj.get("spotPriceSettings") is not None else None,
             "validPeriod": DateInterval.from_dict(obj["validPeriod"]) if obj.get("validPeriod") is not None else None,
-            "recurringPeriods": [RecurringPeriod.from_dict(_item) for _item in obj["recurringPeriods"]] if obj.get("recurringPeriods") is not None else None
+            "price": Price.from_dict(obj["price"]) if obj.get("price") is not None else None,
+            "pricedPeriod": obj.get("pricedPeriod")
         })
         return _obj
 

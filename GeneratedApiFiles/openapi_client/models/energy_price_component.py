@@ -49,7 +49,7 @@ class EnergyPriceComponent(BaseModel):
             return value
 
         if not re.match(r"fixed|spot|kwh", value):
-            raise ValueError(r"must validate the regular expression /fixed|spot/")
+            raise ValueError(r"must validate the regular expression /fixed|spot|kwh/")
         return value
 
     model_config = ConfigDict(
